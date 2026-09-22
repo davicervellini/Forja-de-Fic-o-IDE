@@ -145,6 +145,7 @@ async function pollStatus() {
     el.classList.toggle("off", !ok);
     const where = p => (p === "ollama" ? "" : `${p}: `);
     const models = `${where(st.providers.drafting)}${st.models.drafting} / ${where(st.providers.refining)}${st.models.refining}`;
+    S.statusProviders = st.providers;
     $(".txt", el).textContent = !st.uses_ollama ? `Nuvem · ${models}` : st.ollama ? `Ollama · ${models}` : "Ollama desligado";
     el.title = ok ? `Rascunho: ${st.providers.drafting} · Polimento: ${st.providers.refining} · Resumo: ${st.providers.summarizing}`
                   : "O Ollama não respondeu. Abra o Ollama para gerar capítulos.";
@@ -196,6 +197,10 @@ function handleEvent(e) {
   switch (e.type) {
     case "job_start":
       setJob(e.job);
+      if (e.job.kind === "wiki" && e.job.project === S.slug) {
+        S.wiki = { results: [], total: (S.wiki && S.wiki.total) || 0 };
+        renderWikiReview();
+      }
       S.liveChapter = null;
       break;
     case "status":
@@ -237,6 +242,14 @@ function handleEvent(e) {
     case "chapter_complete":
       if (!quiet && S.job && S.job.project === S.slug) toast(`Capítulo ${String(e.chapter).padStart(2, "0")} pronto.`);
       break;
+    case "wiki_result":
+      if (e.project === S.slug) {
+        if (!S.wiki) S.wiki = { results: [], total: e.total };
+        S.wiki.total = e.total;
+        S.wiki.results.push({ ...e.result, universe: e.universe, include: e.result.found });
+        renderWikiReview();
+      }
+      break;
     case "error":
       // Cancelamento pedido pelo usuário já ganha aviso próprio no fim do trabalho.
       if (!quiet && !e.cancelled) toast(e.message, "error", 10000);
@@ -246,6 +259,10 @@ function handleEvent(e) {
       setJob(null);
       showLiveTab(false);
       if (!quiet && e.job && e.job.status === "cancelled") toast("Geração cancelada.", "warn");
+      if (was && was.kind === "wiki") {
+        if (was.project === S.slug && S.panel === "cast") renderCast();
+        break;
+      }
       if (was && was.project === S.slug) {
         refreshProject().then(() => { if (S.current) loadChapter(S.current, S.tab === "live" ? "final" : S.tab); });
       }
@@ -725,6 +742,8 @@ function renderCast() {
   renderCastList();
   renderCastForm();
   renderRosterMissing();
+  renderWikiReview();
+  $("#btn-wiki-import").disabled = !editable || !!S.job;
 }
 
 function renderCastList() {
@@ -784,6 +803,7 @@ function renderCastForm() {
       <div class="chips">${seen.length ? seen.map(n => `<span class="chip" data-ch="${n}">${String(n).padStart(2, "0")}</span>`).join("") : '<span class="muted">nenhum ainda</span>'}</div>
       <div class="row-actions">
         <button type="button" data-move="-1">↑</button><button type="button" data-move="1">↓</button>
+        <button type="button" data-wiki-one title="Busca este personagem na wiki do universo de origem e escreve a ficha">⇩ Buscar na Wiki</button>
         <span class="spacer"></span><button type="button" class="danger-ghost" data-remove>Remover personagem</button>
       </div>`;
   } else {
@@ -816,6 +836,14 @@ function renderCastForm() {
       renderCastList();
     });
   });
+  const one = $("[data-wiki-one]", box);
+  if (one) {
+    one.disabled = !!S.job || !!ro;
+    one.onclick = () => {
+      const u = S.cast.universes.find(x => x.id === it.universe);
+      openWikiDialog([it.name], u && u.wiki ? u.name : null);
+    };
+  }
   $$("[data-ch]", box).forEach(chip => { chip.onclick = () => selectChapter(parseInt(chip.dataset.ch, 10)); });
   $$("[data-move]", box).forEach(b => {
     b.onclick = () => {
@@ -895,6 +923,111 @@ async function migrateCast() {
     renderCast();
     toast(res.message, "ok", 8000);
   } catch (e) { fail(e); }
+}
+
+
+// ── Importação da Wiki ──────────────────────────────────────
+
+function wikiUniverses() {
+  return (S.cast ? S.cast.universes : []).filter(u => u.wiki && u.wiki.trim())
+    .sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+function findCharacter(name) {
+  const n = name.trim().toLowerCase();
+  return S.cast.characters.find(c => c.name.trim().toLowerCase() === n);
+}
+
+async function openWikiDialog(names = [], universe = null) {
+  if (S.castDirty) {
+    if (!(await confirmDlg("Alterações não salvas", "<p>Salve ou descarte as alterações antes de importar. Descartar agora?</p>", "Descartar", true))) return;
+    await loadCast();
+  }
+  const unis = wikiUniverses();
+  if (!unis.length) {
+    toast("Nenhum universo tem wiki cadastrada. Preencha o campo Wiki (ex.: stargate) na aba Universos e salve.", "warn", 9000);
+    return;
+  }
+  const opts = unis.map(u => `<option value="${esc(u.name)}" ${u.name === universe ? "selected" : ""}>${esc(u.name)}${u.active ? "" : " (reserva)"} · ${esc(u.wiki)}.fandom.com</option>`).join("");
+  const r = await openDialog({
+    title: "Importar personagens da Wiki",
+    body: `<label>Universo<select id="wk-universe">${opts}</select></label>
+      <label>Nomes (um por linha)<textarea id="wk-names" class="editor small" style="min-height:140px">${esc(names.join("\n"))}</textarea></label>
+      <p class="muted">Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo (${esc((S.statusProviders && S.statusProviders.summarizing) || "configurado")}) escreve a ficha em inglês. Você revisa antes de entrar no registro.</p>`,
+    actions: [{ label: "Cancelar", value: null }, { label: "Buscar", cls: "primary", value: "ok", handler: () => {
+      S.wikiRequest = { universe: $("#wk-universe").value, names: $("#wk-names").value.split(/[\n,]/).map(s => s.trim()).filter(Boolean) };
+      if (!S.wikiRequest.names.length) { toast("Digite pelo menos um nome.", "warn"); return false; }
+    } }],
+    onOpen: () => $("#wk-names").focus(),
+  });
+  if (r !== "ok") return;
+  S.wiki = { results: [], total: S.wikiRequest.names.length };
+  renderWikiReview();
+  try { await api("POST", `/api/projects/${S.slug}/wiki/import`, S.wikiRequest); } catch (e) { fail(e); S.wiki = null; renderWikiReview(); }
+}
+
+function renderWikiReview() {
+  const box = $("#wiki-review");
+  if (!S.wiki || S.panel !== "cast" || !S.cast) { box.innerHTML = ""; return; }
+  const running = !!(S.job && S.job.kind === "wiki" && S.job.project === S.slug);
+  const res = S.wiki.results;
+  const rows = res.map((r, i) => {
+    const dup = r.found && findCharacter(r.name);
+    const info = r.found
+      ? `${esc(r.universe)} · página: ${esc(r.page_title)}<br>${esc(r.url)}${dup ? '<br><span class="dup">Já existe no registro: a ficha dele será substituída.</span>' : ""}`
+      : `<span class="err">${esc(r.error)}</span>`;
+    return `<div class="wiki-row" data-i="${i}">
+      <input type="checkbox" data-w="include" ${r.include ? "checked" : ""} ${r.found ? "" : "disabled"}>
+      <div><input data-w="name" value="${esc(r.name)}" ${r.found ? "" : "disabled"}><div class="wiki-info">${info}</div></div>
+      ${r.found ? `<textarea data-w="sheet">${esc(r.sheet)}</textarea>` : "<div></div>"}
+    </div>`;
+  }).join("");
+  const chosen = res.filter(r => r.found && r.include).length;
+  const head = running ? `(${res.length}/${S.wiki.total || "?"}, buscando…)` : `(${res.length} resultado(s))`;
+  box.innerHTML = `<div class="wiki-box">
+    <h3>Importação da Wiki <span class="muted">${head}</span></h3>
+    <p class="muted">Revise nome e ficha. Os marcados entram no registro com o universo de origem e na lista de permitidos do universo.</p>
+    ${rows || '<p class="muted">Aguardando o primeiro resultado…</p>'}
+    <div class="tab-tools" style="margin-top:10px">
+      <button class="primary" id="btn-wiki-apply" ${running || !chosen ? "disabled" : ""}>Adicionar ${chosen} ao registro</button>
+      <button id="btn-wiki-discard" ${running ? "disabled" : ""}>Descartar</button>
+    </div></div>`;
+  $$(".wiki-row", box).forEach(row => {
+    const r = res[parseInt(row.dataset.i, 10)];
+    $$("[data-w]", row).forEach(el => {
+      el.addEventListener("input", () => {
+        if (el.dataset.w === "include") { r.include = el.checked; renderWikiReview(); }
+        else r[el.dataset.w] = el.value;
+      });
+      if (el.dataset.w === "name") el.addEventListener("change", renderWikiReview);
+    });
+  });
+  const apply = $("#btn-wiki-apply");
+  if (apply) apply.onclick = applyWiki;
+  const discard = $("#btn-wiki-discard");
+  if (discard) discard.onclick = () => { S.wiki = null; renderWikiReview(); };
+}
+
+async function applyWiki() {
+  const picked = S.wiki.results.filter(r => r.found && r.include && r.name.trim());
+  for (const r of picked) {
+    const uni = S.cast.universes.find(u => u.name === r.universe);
+    let c = findCharacter(r.name);
+    if (c) {
+      c.sheet = r.sheet.trim();
+      if (!c.universe && uni) c.universe = uni.id;
+    } else {
+      c = { name: r.name.trim(), role: "supporting", origin: "", age: "", universe: uni ? uni.id : "",
+            notes: `Wiki: ${r.url}`, sheet: r.sheet.trim(), sheet_label: "" };
+      S.cast.characters.push(c);
+    }
+    if (uni && !uni.allowed_characters.some(a => a.toLowerCase() === c.name.toLowerCase())) uni.allowed_characters.push(c.name);
+  }
+  S.castTab = "characters";
+  S.castSel = S.cast.characters.length - 1;
+  S.wiki = null;
+  await saveCast();
+  renderWikiReview();
 }
 
 // ── Configurações ───────────────────────────────────────────
@@ -1078,6 +1211,7 @@ function bind() {
   $("#btn-export").onclick = exportBook;
   $("#btn-save-cast").onclick = saveCast;
   $("#btn-cast-add").onclick = addCastItem;
+  $("#btn-wiki-import").onclick = () => openWikiDialog();
   $$("#cast-tabs button").forEach(b => { b.onclick = () => { S.castTab = b.dataset.ctab; S.castSel = 0; renderCast(); }; });
   document.addEventListener("keydown", ev => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {

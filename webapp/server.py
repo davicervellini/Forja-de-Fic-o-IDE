@@ -96,6 +96,11 @@ class KeyBody(BaseModel):
     key: str = ""
 
 
+class WikiBody(BaseModel):
+    names: list[str]
+    universe: str
+
+
 class CastBody(BaseModel):
     characters: list[dict[str, Any]]
     universes: list[dict[str, Any]]
@@ -410,9 +415,9 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
     # ── Geração ──────────────────────────────────────────────
 
-    def require_backends():
+    def require_backends(used: set[str] | None = None):
         """Antes de gerar: Ollama no ar se alguma fase usa ele, chave cadastrada para cada provedor na nuvem."""
-        used = set(phase_providers().values())
+        used = used if used is not None else set(phase_providers().values())
         missing = [label(p) for p in used if is_cloud(p) and not credentials.get_key(p)]
         if missing:
             raise HTTPException(400, f"Falta a chave de API de {', '.join(missing)}. Cadastre em ⚙ Configurações.")
@@ -466,6 +471,49 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         chapter_exists(project, num)
         return start_job(slug, "memory", f"Atualizando memória com o capítulo {num:02d}",
                          lambda orch, _p, cb: orch.refresh_memory(num, cb))
+
+    @app.post("/api/projects/{slug}/wiki/import")
+    def wiki_import(slug: str, body: WikiBody):
+        """
+        Busca personagens na wiki do universo e escreve a ficha de cada um com o modelo da
+        fase de resumo. Cada resultado sai como evento `wiki_result`; nada é gravado até o
+        usuário confirmar na tela (PUT /cast).
+        """
+        from pipeline.wiki_fetcher import fetch_character_sheet, project_universes
+
+        project = load(slug)
+        names = []
+        for n in body.names:
+            n = n.strip()
+            if n and n not in names:
+                names.append(n)
+        if not names:
+            raise HTTPException(400, "Digite pelo menos um nome.")
+        if not any(u["name"] == body.universe for u in project_universes(project.project_dir)):
+            raise HTTPException(400, f"O universo '{body.universe}' não tem wiki cadastrada. Preencha o campo Wiki na aba Universos.")
+        ensure_idle()
+        require_backends({config.PROVIDER_SUMMARIZING})
+
+        def target(callbacks, cancel_event: threading.Event):
+            total = len(names)
+            for i, name in enumerate(names, start=1):
+                if cancel_event.is_set():
+                    break
+                callbacks.on_status(f"Wiki {i}/{total}: {name}")
+                try:
+                    result = fetch_character_sheet(name, body.universe, project.project_dir, cancel_event)
+                except Exception as e:  # erro do modelo: vira aviso na linha, a fila segue
+                    if cancel_event.is_set():
+                        break
+                    result = {"name": name, "page_title": "", "sheet": "", "url": "", "found": False,
+                              "error": f"Falha ao escrever a ficha: {e}"}
+                jobs.emit("wiki_result", project=slug, universe=body.universe, index=i, total=total, result=result)
+
+        try:
+            job = jobs.start("wiki", slug, f"Importando {len(names)} personagem(ns) da wiki", target)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return {"job": job.id}
 
     @app.post("/api/jobs/cancel")
     def cancel():

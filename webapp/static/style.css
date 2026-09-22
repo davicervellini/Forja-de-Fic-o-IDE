@@ -256,3 +256,13 @@ dialog.wide { width: min(900px, 94vw); }
 .roster-box h4 { margin: 0 0 6px; font-size: 13px; color: var(--amber); }
 .roster-box .item { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .roster-box .item span { flex: 1; }
+
+/* ── Importação da Wiki ── */
+.wiki-box { border: 1px solid #2c4263; background: #172231; border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px; }
+.wiki-box h3 { margin: 0 0 4px; }
+.wiki-row { border-top: 1px solid #2c4263; padding: 10px 0; display: grid; grid-template-columns: 24px 220px 1fr; gap: 10px; align-items: start; }
+.wiki-row input[type=checkbox] { width: auto; margin-top: 8px; }
+.wiki-row textarea { min-height: 90px; font: 14px/1.5 var(--serif); }
+.wiki-row .wiki-info { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+.wiki-row .dup { color: var(--amber); }
+.wiki-row .err { color: var(--red); font-size: 13px; }

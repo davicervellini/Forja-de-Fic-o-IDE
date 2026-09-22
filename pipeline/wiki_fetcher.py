@@ -1,12 +1,14 @@
 """
 wiki_fetcher.py — Busca informações canônicas de personagens nas Wikis do Fandom.
 
-Baixa o código-fonte (Wikitext) da introdução do personagem e usa o Ollama
-para converter em uma "short sheet" compatível com o Registro Akáshico,
-adicionando automaticamente à Memória Dinâmica.
+Baixa o código-fonte (Wikitext) da introdução do personagem e usa o modelo da fase de
+resumo (Ollama ou nuvem) para escrever a ficha curta em inglês. A interface nova põe a
+ficha no personagem do Registro Akáshico (fetch_character_sheet); a antiga ainda usa
+add_character_to_memory, que acrescenta à Memória Dinâmica.
 """
 
 import logging
+import re
 from pathlib import Path
 
 import requests
@@ -69,6 +71,23 @@ def resolve_wiki_domain(franchise: str, project_dir: str | Path | None = None) -
 
 def search_fandom_wiki(character_name: str, franchise: str, project_dir: str | Path | None = None) -> str | None:
     """Busca o wikitexto do personagem na API do Fandom."""
+    found = search_fandom_page(character_name, franchise, project_dir)
+    return found[1] if found else None
+
+
+def _tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9à-ÿ]+", text.lower()) if len(w) >= 3}
+
+
+def title_matches(query: str, title: str) -> bool:
+    """O título da página tem pelo menos uma palavra (de 3+ letras) do nome procurado."""
+    return bool(_tokens(query) & _tokens(title))
+
+
+def search_fandom_page(
+    character_name: str, franchise: str, project_dir: str | Path | None = None
+) -> tuple[str, str, str] | None:
+    """(título da página, wikitexto, endereço) do personagem na wiki do Fandom, ou None."""
     domain = resolve_wiki_domain(franchise, project_dir)
     if not domain:
         raise ValueError(f"Universo '{franchise}' sem wiki cadastrada. Informe o subdomínio na tela do Registro Akáshico.")
@@ -93,8 +112,11 @@ def search_fandom_wiki(character_name: str, franchise: str, project_dir: str | P
         if not search_results:
             return None
 
-        # Pega a página mais relevante
-        best_title = search_results[0]["title"]
+        # A busca do Fandom devolve qualquer página parecida ("Pessoa Xyz" acha "PX5-442"):
+        # só vale um resultado que tenha no título alguma palavra do nome procurado.
+        best_title = next((r["title"] for r in search_results if title_matches(character_name, r["title"])), None)
+        if not best_title:
+            return None
 
         # Passo 2: Pegar o wikitexto
         content_params = {
@@ -117,8 +139,10 @@ def search_fandom_wiki(character_name: str, franchise: str, project_dir: str | P
             revisions = page_data.get("revisions", [])
             if revisions:
                 wikitext = revisions[0].get("slots", {}).get("main", {}).get("*", "")
+                title = page_data.get("title", best_title)
+                page_url = f"https://{domain}.fandom.com/wiki/{title.replace(' ', '_')}"
                 # Limita a 4000 caracteres (suficiente para infobox e introdução)
-                return wikitext[:4000]
+                return title, wikitext[:4000], page_url
 
     except Exception as e:
         logger.error(f"Erro ao buscar na wiki: {e}")
@@ -127,25 +151,62 @@ def search_fandom_wiki(character_name: str, franchise: str, project_dir: str | P
     return None
 
 
-def extract_character_sheet_with_llm(character_name: str, wikitext: str) -> str:
-    """Usa o Ollama para transformar wikitexto confuso em uma short sheet limpa."""
-    system_prompt = (
-        "You are a wiki archivist. Convert the provided raw wikitext into a short "
-        "character sheet. Extract ONLY: Name, Origin, Appearance, Personality, and Powers. "
-        "Keep it under 100 words. Format as a single paragraph starting with the character's name in bold."
-    )
+SHEET_SYSTEM_PROMPT = (
+    "You are a wiki archivist for a fanfiction writing tool. Convert the raw wikitext into a short "
+    "character sheet in English: ONE paragraph, under 100 words, covering origin, appearance, "
+    "personality, powers or skills, and how they speak. Canon facts only, no speculation. "
+    "In-universe only: never mention actors, voice actors, episodes, seasons or production. "
+    "Do not start with the character's name or a heading; output only the paragraph."
+)
 
-    user_prompt = f"Raw Wikitext for {character_name}:\n\n{wikitext}\n\nCreate the short character sheet."
 
+def extract_character_sheet_with_llm(character_name: str, wikitext: str, cancel_event=None) -> str:
+    """Usa o modelo da fase de resumo (local ou nuvem) para transformar o wikitexto numa ficha curta."""
+    user_prompt = f"Raw wikitext for {character_name}:\n\n{wikitext}\n\nWrite the short character sheet."
     sheet = generate_text(
         model=config.MODEL_SUMMARIZING,
-        system_prompt=system_prompt,
+        provider=config.PROVIDER_SUMMARIZING,
+        system_prompt=SHEET_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         temperature=0.2,
         num_ctx=4096,
-        timeout=120,
+        timeout=180,
+        cancel_event=cancel_event,
+        extra_options={"num_predict": 300},
     )
-    return sheet.strip()
+    return clean_sheet(sheet)
+
+
+def clean_sheet(sheet: str) -> str:
+    """Tira título, nome em negrito e aspas que o modelo às vezes põe antes da ficha."""
+    text = (sheet or "").strip().strip('"').strip()
+    lines = [l for l in text.splitlines() if l.strip()]
+    if len(lines) > 1 and (lines[0].lstrip().startswith("#") or len(lines[0].split()) <= 5):
+        lines = lines[1:]
+    text = " ".join(l.strip() for l in lines)
+    text = re.sub(r"^\*\*[^*]{1,80}\*\*[\s.:—-]*", "", text)
+    return text.strip()
+
+
+def fetch_character_sheet(name: str, universe: str, project_dir: str | Path, cancel_event=None) -> dict:
+    """
+    Busca um personagem na wiki do universo e escreve a ficha para o modelo.
+    Retorna {name, page_title, sheet, url, found, error}; não grava nada. O nome fica o que o
+    usuário digitou: o título da página costuma ser o nome completo ("Meredith Rodney McKay").
+    """
+    out = {"name": name, "page_title": "", "sheet": "", "url": "", "found": False, "error": ""}
+    try:
+        page = search_fandom_page(name, universe, project_dir)
+    except Exception as e:  # rede, wiki fora do ar, subdomínio errado
+        out["error"] = f"Falha ao consultar a wiki: {e}"
+        return out
+    if not page:
+        out["error"] = f"Não encontrado na wiki de {universe}."
+        return out
+    title, wikitext, url = page
+    out.update(page_title=title, url=url, found=True)
+    out["sheet"] = extract_character_sheet_with_llm(title, wikitext, cancel_event=cancel_event)
+    return out
 
 
 def add_character_to_memory(character_name: str, franchise: str, project_dir: str | Path) -> str:
@@ -166,7 +227,7 @@ def add_character_to_memory(character_name: str, franchise: str, project_dir: st
 
     sheet = extract_character_sheet_with_llm(character_name, wikitext)
 
-    addition = f"\n- {sheet}"
+    addition = f"\n- **{character_name}**: {sheet}"
     new_memory = (current_memory + addition).strip()
 
     dyn_path.parent.mkdir(parents=True, exist_ok=True)

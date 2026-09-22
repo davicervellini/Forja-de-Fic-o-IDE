@@ -50,8 +50,11 @@ a memória depois de uma edição, ver e restaurar versões anteriores, editar a
 história e o Registro Akáshico em texto, exportar o livro (EPUB, Markdown, TXT, HTML) e
 mudar as configurações. A tela **Personagens e universos** edita as fichas que vão para
 o modelo (seções 5.8 e 9.5 do Registro), mostra em que capítulos cada personagem aparece
-e lista quem surgiu na memória da história sem ficha no registro. O assistente de
-criação e a importação da wiki continuam na interface antiga até serem migrados.
+e lista quem surgiu na memória da história sem ficha no registro. O botão **Importar da
+Wiki** busca personagens na wiki do Fandom do universo (campo Wiki na aba Universos), o
+modelo da fase de resumo escreve a ficha em inglês e você revisa antes de ela entrar no
+registro, com o universo de origem e a lista de permitidos. O assistente de criação
+continua na interface antiga até ser migrado.
 
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.

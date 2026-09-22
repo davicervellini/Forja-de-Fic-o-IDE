@@ -154,3 +154,60 @@ def test_api_de_personagens(tmp_path):
         assert r.json()["characters"][0]["sheet"] == "New sheet."
         r = c.put(f"/api/projects/{slug}/cast", json={"characters": [{"name": ""}], "universes": []})
         assert r.status_code == 400 and "nome" in r.json()["detail"]
+
+
+def test_importacao_da_wiki_gera_resultados_sem_gravar(tmp_path):
+    from fastapi.testclient import TestClient
+    import pipeline.wiki_fetcher as wf
+    import webapp.server as srv
+
+    root = tmp_path / "projetos"
+    root.mkdir()
+    proj = _project(root)
+    data = cast.overview(proj)
+    data["universes"][0]["wiki"] = "stargate"
+    cast.save(proj, data["characters"], data["universes"])
+    before = proj.akashic_path.read_text(encoding="utf-8")
+
+    def fake_fetch(name, universe, project_dir, cancel_event=None):
+        if name == "Nobody":
+            return {"name": name, "page_title": "", "sheet": "", "url": "", "found": False, "error": "Não encontrado."}
+        return {"name": name, "page_title": f"{name} (page)", "sheet": f"Sheet of {name}.",
+                "url": "https://stargate.fandom.com/wiki/X", "found": True, "error": ""}
+
+    with patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
+            patch.object(srv, "check_ollama_health", lambda **kw: True), \
+            patch.object(wf, "fetch_character_sheet", fake_fetch):
+        c = TestClient(srv.create_app())
+        jobs = c.app.state.jobs
+        slug = proj.project_dir.name
+        r = c.post(f"/api/projects/{slug}/wiki/import", json={"names": ["DC"], "universe": "Narnia"})
+        assert r.status_code == 400 and "wiki" in r.json()["detail"]
+        q, _ = jobs.subscribe()
+        r = c.post(f"/api/projects/{slug}/wiki/import",
+                   json={"names": ["Rodney McKay", "Nobody", "Rodney McKay"], "universe": "Stargate Atlantis"})
+        assert r.status_code == 200, r.text
+        assert jobs.wait(10)
+        results = []
+        while not q.empty():
+            e = q.get_nowait()
+            if e["type"] == "wiki_result":
+                results.append(e["result"])
+        assert [x["name"] for x in results] == ["Rodney McKay", "Nobody"]
+        assert results[0]["sheet"] == "Sheet of Rodney McKay." and results[1]["found"] is False
+    # A importação só sugere: o registro não muda até o usuário confirmar.
+    assert proj.akashic_path.read_text(encoding="utf-8") == before
+
+
+def test_ficha_da_wiki_sai_limpa():
+    from pipeline.wiki_fetcher import clean_sheet
+    assert clean_sheet("**Rodney McKay**: A brilliant astrophysicist.") == "A brilliant astrophysicist."
+    assert clean_sheet("# Rodney McKay\n\nA brilliant astrophysicist.") == "A brilliant astrophysicist."
+    assert clean_sheet('"A brilliant astrophysicist."') == "A brilliant astrophysicist."
+
+
+def test_busca_da_wiki_so_aceita_titulo_parecido():
+    from pipeline.wiki_fetcher import title_matches
+    assert title_matches("Rodney McKay", "Meredith Rodney McKay")
+    assert title_matches("teyla", "Teyla Emmagan")
+    assert not title_matches("Pessoa Inexistente Xyz", "PX5-442")
