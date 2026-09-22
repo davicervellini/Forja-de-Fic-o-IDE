@@ -45,11 +45,12 @@ def _invert(d: dict) -> dict:
 # ── Editores reutilizáveis (assistente e tela de edição) ─────────────────────────────
 
 class UniversesEditor(ctk.CTkFrame):
-    """Lista editável de universos: papel, wiki, ativo/reserva e personagens permitidos."""
+    """Lista editável de universos: papel, wiki, ativo/reserva, personagens permitidos e ficha para o modelo."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, show_sheet: bool = False):
         super().__init__(parent, fg_color="transparent")
         self.rows: list[dict] = []
+        self.show_sheet = show_sheet
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         top = ctk.CTkFrame(self, fg_color="transparent")
@@ -85,7 +86,8 @@ class UniversesEditor(ctk.CTkFrame):
         card = ctk.CTkFrame(self.scroll, fg_color=BG_CARD, corner_radius=8)
         card.grid(row=len(self.rows), column=0, sticky="ew", padx=2, pady=4)
         card.grid_columnconfigure(1, weight=1)
-        row = {"card": card, "id": u.id, "notes": u.notes, "name": ctk.StringVar(value=u.name),
+        row = {"card": card, "id": u.id, "notes": u.notes, "model_sheet": u.model_sheet, "sheet_tb": None,
+               "name": ctk.StringVar(value=u.name),
                "role": ctk.StringVar(value=ROLES.get(u.role, u.role)), "wiki": ctk.StringVar(value=u.wiki),
                "active": ctk.BooleanVar(value=u.active), "allowed": ctk.StringVar(value=", ".join(u.allowed_characters))}
         ctk.CTkEntry(card, textvariable=row["name"], font=_font(13, True), fg_color=BG_DARK, border_color=BORDER).grid(row=0, column=0, columnspan=2, padx=10, pady=(8, 4), sticky="ew")
@@ -96,6 +98,13 @@ class UniversesEditor(ctk.CTkFrame):
         ctk.CTkEntry(card, textvariable=row["wiki"], width=170, fg_color=BG_DARK, border_color=BORDER, placeholder_text="ex.: stargate").grid(row=1, column=1, sticky="w", pady=2)
         ctk.CTkLabel(card, text="Personagens permitidos (separe por vírgula)", text_color=TEXT_DIM, font=_font(11)).grid(row=2, column=0, columnspan=2, padx=10, sticky="w")
         ctk.CTkEntry(card, textvariable=row["allowed"], fg_color=BG_DARK, border_color=BORDER).grid(row=3, column=0, columnspan=5, padx=10, pady=(0, 10), sticky="ew")
+        if self.show_sheet:
+            ctk.CTkLabel(card, text="Ficha para o modelo, em inglês: o que existe aqui e o que nunca aparece (só universos ativos vão para o modelo)",
+                         text_color=TEXT_DIM, font=_font(11)).grid(row=4, column=0, columnspan=5, padx=10, sticky="w")
+            tb = ctk.CTkTextbox(card, height=70, wrap="word", font=_font(12), fg_color=BG_DARK, border_color=BORDER, border_width=1)
+            tb.insert("1.0", u.model_sheet)
+            tb.grid(row=5, column=0, columnspan=5, padx=10, pady=(0, 10), sticky="ew")
+            row["sheet_tb"] = tb
         row["name_value"] = u.name
         self.rows.append(row)
 
@@ -117,18 +126,20 @@ class UniversesEditor(ctk.CTkFrame):
             if not name:
                 continue
             allowed = [a.strip() for a in r["allowed"].get().split(",") if a.strip()]
+            sheet = r["sheet_tb"].get("1.0", "end").strip() if r["sheet_tb"] else r["model_sheet"]
             out.append(Universe(id=r["id"], name=name, role=roles.get(r["role"].get(), "source"),
                                 wiki=r["wiki"].get().strip(), active=bool(r["active"].get()),
-                                notes=r["notes"], allowed_characters=allowed))
+                                notes=r["notes"], allowed_characters=allowed, model_sheet=sheet))
         return out
 
 
 class CharactersEditor(ctk.CTkFrame):
-    """Lista editável de personagens (nome, origem, idade, papel)."""
+    """Lista editável de personagens (nome, origem, idade, papel e ficha para o modelo)."""
 
-    def __init__(self, parent, default_role="protagonist", show_role=True):
+    def __init__(self, parent, default_role="protagonist", show_role=True, show_sheet: bool = False):
         super().__init__(parent, fg_color="transparent")
         self.default_role, self.show_role, self.rows = default_role, show_role, []
+        self.show_sheet = show_sheet
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         ctk.CTkButton(self, text="＋ Personagem", width=130, command=lambda: self._add_row(Character(name="", role=self.default_role)), fg_color=GREEN).grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -140,7 +151,8 @@ class CharactersEditor(ctk.CTkFrame):
         card = ctk.CTkFrame(self.scroll, fg_color=BG_CARD, corner_radius=8)
         card.grid(row=len(self.rows), column=0, sticky="ew", padx=2, pady=4)
         card.grid_columnconfigure(0, weight=1)
-        row = {"card": card, "universe": c.universe, "notes": c.notes, "name": ctk.StringVar(value=c.name),
+        row = {"card": card, "universe": c.universe, "notes": c.notes, "sheet": c.sheet, "sheet_label": c.sheet_label,
+               "sheet_tb": None, "name": ctk.StringVar(value=c.name),
                "origin": ctk.StringVar(value=c.origin), "age": ctk.StringVar(value=c.age),
                "role": ctk.StringVar(value=CHAR_ROLES.get(c.role, c.role))}
         ctk.CTkEntry(card, textvariable=row["name"], placeholder_text="Nome", font=_font(13, True), fg_color=BG_DARK, border_color=BORDER).grid(row=0, column=0, padx=10, pady=8, sticky="ew")
@@ -151,6 +163,13 @@ class CharactersEditor(ctk.CTkFrame):
             ctk.CTkComboBox(card, values=list(CHAR_ROLES.values()), variable=row["role"], width=130, fg_color=BG_DARK, border_color=BORDER).grid(row=0, column=col, padx=4)
             col += 1
         ctk.CTkButton(card, text="✕", width=30, fg_color=BG_HOVER, hover_color=RED, command=lambda r=row: self._remove(r)).grid(row=0, column=col, padx=(4, 10))
+        if self.show_sheet:
+            ctk.CTkLabel(card, text="Ficha para o modelo, em inglês: origem, aparência, personalidade, poderes, jeito de falar",
+                         text_color=TEXT_DIM, font=_font(11)).grid(row=1, column=0, columnspan=col + 1, padx=10, sticky="w")
+            tb = ctk.CTkTextbox(card, height=90, wrap="word", font=_font(12), fg_color=BG_DARK, border_color=BORDER, border_width=1)
+            tb.insert("1.0", c.sheet)
+            tb.grid(row=2, column=0, columnspan=col + 1, padx=10, pady=(0, 10), sticky="ew")
+            row["sheet_tb"] = tb
         self.rows.append(row)
 
     def _remove(self, row: dict):
@@ -169,9 +188,11 @@ class CharactersEditor(ctk.CTkFrame):
         for r in self.rows:
             name = r["name"].get().strip()
             if name:
+                sheet = r["sheet_tb"].get("1.0", "end").strip() if r["sheet_tb"] else r["sheet"]
                 out.append(Character(name=name, role=roles.get(r["role"].get(), self.default_role) if self.show_role else self.default_role,
                                      origin=r["origin"].get().strip(), age=r["age"].get().strip(),
-                                     universe=r["universe"], notes=r["notes"]))
+                                     universe=r["universe"], notes=r["notes"], sheet=sheet,
+                                     sheet_label=r["sheet_label"]))
         return out
 
 
@@ -407,12 +428,12 @@ class AkashicEditor(ctk.CTkToplevel):
         ctk.CTkLabel(top, text="Estrutura do mundo", text_color=TEXT_DIM, font=_font(12)).pack(side="left", padx=(0, 8))
         self.structure_var = ctk.StringVar()
         ctk.CTkComboBox(top, values=list(STRUCTURES.values()), variable=self.structure_var, width=330, fg_color=BG_CARD, border_color=BORDER).pack(side="left")
-        self.universes = UniversesEditor(u_tab)
+        self.universes = UniversesEditor(u_tab, show_sheet=True)
         self.universes.grid(row=1, column=0, sticky="nsew")
         c_tab = self.tabs.tab("Personagens")
         c_tab.grid_columnconfigure(0, weight=1)
         c_tab.grid_rowconfigure(0, weight=1)
-        self.characters = CharactersEditor(c_tab)
+        self.characters = CharactersEditor(c_tab, show_sheet=True)
         self.characters.grid(row=0, column=0, sticky="nsew")
         t_tab = self.tabs.tab("Texto")
         t_tab.grid_columnconfigure(0, weight=1)
@@ -449,6 +470,10 @@ class AkashicEditor(ctk.CTkToplevel):
         meta, body = read_meta(text)
         self._meta_missing = meta is None
         self.meta = meta or AkashicMeta(title=self.project.name)
+        if meta is not None and not self.meta.lists_synced:
+            # Primeira abertura: as fichas das seções 9.5 e 5.8 do texto passam para as abas.
+            from pipeline.akashic_sync import import_lists_from_body
+            import_lists_from_body(self.meta, body)
         if self._meta_missing and body.strip():
             self.banner_lbl.configure(text="Este arquivo está no formato antigo (v1): universos e personagens ainda não foram lidos.")
             self.banner.grid()
@@ -482,14 +507,20 @@ class AkashicEditor(ctk.CTkToplevel):
         m = re.search(r"^# (?:Bíblia do Mundo:\s*)?(.+)$", body, re.M)
         return AkashicMeta(title=self.meta.title or (m.group(1).strip() if m else self.project.name),
                            structure=structure, language=self.meta.language, universes=self.universes.get(),
-                           characters=self.characters.get(), answers=self.meta.answers)
+                           characters=self.characters.get(), answers=self.meta.answers,
+                           lists_synced=self.meta.lists_synced)
 
     def _save(self):
         body = self.text_box.get("1.0", "end").rstrip() + "\n"
         path = self.project.akashic_path
         if path.exists():
             shutil.copy2(path, path.with_suffix(".md.bak"))  # uma cópia rolante: projetos/ não tem histórico no Git
-        write_file(path, write_meta(body, self._current_meta()))
+        meta = self._current_meta()
+        if not self._meta_missing:
+            from pipeline.akashic_sync import render_lists_into_body
+            meta.lists_synced = True
+            body = render_lists_into_body(body, meta)
+        write_file(path, write_meta(body, meta))
         ok, msg = build_registro_modelo(self.project.project_dir)
         self.status_lbl.configure(text=("✓ Salvo. " if ok else "Salvo, mas o modelo falhou: ") + msg, text_color=GREEN if ok else AMBER)
         self._load()

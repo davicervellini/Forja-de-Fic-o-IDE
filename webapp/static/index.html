@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forja de Ficção</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <button class="brand" id="btn-home" title="Projetos">Forja de Ficção</button>
+  <span class="crumb" id="crumb"></span>
+  <span class="spacer"></span>
+  <span class="ollama" id="ollama-status" title="Ollama"><span class="dot"></span><span class="txt">Ollama…</span></span>
+  <button class="icon" id="btn-settings" title="Configurações">⚙</button>
+</header>
+
+<main id="view-projects" class="view">
+  <div class="projects-head">
+    <h1>Projetos</h1>
+    <button class="primary" id="btn-new-project">+ Novo projeto</button>
+  </div>
+  <div id="project-list" class="project-grid"></div>
+</main>
+
+<main id="view-project" class="view hidden">
+  <aside class="sidebar">
+    <div class="side-actions">
+      <button class="primary" id="btn-add-chapter">+ Capítulo</button>
+      <button id="btn-generate" title="Gera todos os capítulos pendentes que têm premissa">▶ Gerar pendentes</button>
+    </div>
+    <ol id="chapter-list" class="chapter-list"></ol>
+    <div class="side-footer">
+      <button class="link" data-panel="story">História até agora</button>
+      <button class="link" data-panel="akashic">Registro Akáshico</button>
+      <button class="link" data-panel="export">Exportar livro</button>
+    </div>
+  </aside>
+
+  <section class="content" id="content">
+    <div id="panel-chapter" class="panel hidden">
+      <div class="chapter-head">
+        <h2 id="ch-title"></h2>
+        <span class="badge" id="ch-status"></span>
+        <span class="muted" id="ch-words"></span>
+        <span class="spacer"></span>
+        <button id="btn-refresh-memory" class="warn hidden" title="O texto mudou depois que a memória foi atualizada">↻ Atualizar memória</button>
+        <button id="btn-redo">⟲ Refazer</button>
+        <button id="btn-delete-chapter" class="danger-ghost" title="Move o capítulo para a lixeira do projeto">Excluir</button>
+      </div>
+      <div class="notice hidden" id="ch-notice"></div>
+      <nav class="tabs" id="ch-tabs">
+        <button data-tab="final" class="active">Texto final</button>
+        <button data-tab="draft">Rascunho</button>
+        <button data-tab="premise">Premissa</button>
+        <button data-tab="summary">Resumo</button>
+        <button data-tab="extras">Verificações</button>
+        <button data-tab="versions">Versões</button>
+        <button data-tab="live" class="hidden" id="tab-live">● Ao vivo</button>
+      </nav>
+
+      <div class="tab" data-tab="final">
+        <div class="tab-tools">
+          <button id="btn-edit-final">✎ Editar</button>
+          <button id="btn-save-final" class="primary hidden">Salvar</button>
+          <button id="btn-cancel-final" class="hidden">Descartar alterações</button>
+          <span class="muted" id="final-hint"></span>
+        </div>
+        <article class="reader" id="final-view"></article>
+        <textarea class="editor hidden" id="final-edit" spellcheck="true"></textarea>
+      </div>
+      <div class="tab hidden" data-tab="draft"><article class="reader" id="draft-view"></article></div>
+      <div class="tab hidden" data-tab="premise">
+        <div class="tab-tools">
+          <button id="btn-save-premise" class="primary">Salvar premissa</button>
+          <span class="muted">Mudar a premissa não reescreve o capítulo. Use ⟲ Refazer para isso.</span>
+        </div>
+        <textarea class="editor" id="premise-edit"></textarea>
+      </div>
+      <div class="tab hidden" data-tab="summary"><article class="reader" id="summary-view"></article></div>
+      <div class="tab hidden" data-tab="extras" id="extras-view"></div>
+      <div class="tab hidden" data-tab="versions">
+        <p class="muted">Toda edição, refação ou restauração guarda antes o texto anterior aqui.</p>
+        <div id="versions-list"></div>
+      </div>
+      <div class="tab hidden" data-tab="live"><article class="reader live" id="live-view"></article></div>
+    </div>
+
+    <div id="panel-story" class="panel hidden">
+      <h2>História até agora</h2>
+      <p class="muted">É o que o modelo lembra da história. Os campos são atualizados a cada capítulo; você pode corrigir à mão.</p>
+      <label>Personagens (roster)<textarea class="editor small" data-state="character_roster"></textarea></label>
+      <label>Pontas soltas (open threads)<textarea class="editor small" data-state="open_threads"></textarea></label>
+      <label>Memória dinâmica<textarea class="editor small" data-state="dynamic_memory"></textarea></label>
+      <label>História até agora (resumos fundidos)<textarea class="editor small" data-state="story_so_far"></textarea></label>
+      <div class="tab-tools"><button class="primary" id="btn-save-state">Salvar</button></div>
+      <h3>Resumos recentes</h3>
+      <div id="summaries"></div>
+    </div>
+
+    <div id="panel-akashic" class="panel hidden">
+      <h2>Registro Akáshico</h2>
+      <p class="muted">Texto completo do registro. Ao salvar, a versão curta que vai para o modelo é gerada de novo, e a anterior fica em <code>registro_akashico.anterior.md</code>. O editor com abas de universos e personagens continua na versão antiga do programa por enquanto.</p>
+      <textarea class="editor tall mono" id="akashic-edit"></textarea>
+      <div class="tab-tools"><button class="primary" id="btn-save-akashic">Salvar registro</button><span class="muted" id="akashic-msg"></span></div>
+    </div>
+
+    <div id="panel-export" class="panel hidden">
+      <h2>Exportar livro</h2>
+      <div class="form-grid">
+        <label>Título do livro<input id="meta-title" placeholder="usa o nome do projeto"></label>
+        <label>Autor<input id="meta-author"></label>
+        <label>Idioma do texto<select id="meta-lang"><option value="en">Inglês</option><option value="pt-BR">Português</option><option value="es">Espanhol</option></select></label>
+        <label>Formato<select id="export-format">
+          <option value="epub">EPUB (leitores de e-book)</option>
+          <option value="md">Markdown (Webnovel, AO3, Wattpad)</option>
+          <option value="txt">Texto puro</option>
+          <option value="html">HTML (página única)</option>
+        </select></label>
+        <label>Do capítulo<input id="export-first" type="number" min="1" placeholder="primeiro"></label>
+        <label>Até o capítulo<input id="export-last" type="number" min="1" placeholder="último"></label>
+      </div>
+      <p class="muted">Entra o texto final de cada capítulo do intervalo. Capítulos sem texto final ficam de fora.</p>
+      <div class="tab-tools"><button class="primary" id="btn-export">Exportar…</button><span class="muted" id="export-msg"></span></div>
+    </div>
+
+    <div id="panel-empty" class="panel">
+      <div class="empty">
+        <p>Escolha um capítulo à esquerda ou crie um com <b>+ Capítulo</b>.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="jobbar hidden" id="jobbar">
+  <span class="spinner"></span>
+  <span id="job-label"></span>
+  <span class="muted" id="job-status"></span>
+  <span class="spacer"></span>
+  <button id="btn-cancel-job" class="danger-ghost">Cancelar</button>
+</footer>
+
+<dialog id="dlg"><form method="dialog" id="dlg-form"><h3 id="dlg-title"></h3><div id="dlg-body"></div><div class="dlg-actions" id="dlg-actions"></div></form></dialog>
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -13,7 +13,8 @@ from typing import Callable
 
 import requests
 
-from pipeline.config import OLLAMA_GENERATE_URL, OLLAMA_BASE_URL, REQUEST_TIMEOUT
+# A configuração pode mudar pela tela ⚙ Configurações: ler config.NOME na hora de usar.
+from pipeline import config
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +32,23 @@ class GenerationInterrupted(Exception):
         super().__init__(message)
 
 
-def check_ollama_health(timeout: int = 10) -> bool:
-    """
-    Verifica se o servidor Ollama está acessível.
-
-    Returns:
-        True se o servidor responder, False caso contrário.
-    """
+def check_ollama_health(timeout: int = 10, base_url: str | None = None) -> bool:
+    """True se o servidor Ollama responder. `base_url` testa outro endereço sem mudar a configuração."""
     try:
-        resp = requests.get(OLLAMA_BASE_URL, timeout=timeout)
+        resp = requests.get(base_url or config.OLLAMA_BASE_URL, timeout=timeout)
         return resp.status_code == 200
     except requests.RequestException:
         return False
+
+
+def list_installed_models(timeout: int = 10, base_url: str | None = None) -> list[str]:
+    """Nomes dos modelos baixados no Ollama (ex.: 'llama3.1:8b'). Lista vazia se o Ollama não responder."""
+    try:
+        resp = requests.get(f"{(base_url or config.OLLAMA_BASE_URL).rstrip('/')}/api/tags", timeout=timeout)
+        resp.raise_for_status()
+        return sorted(m.get("name", "") for m in resp.json().get("models", []) if m.get("name"))
+    except (requests.RequestException, ValueError):
+        return []
 
 
 def generate_text(
@@ -78,7 +84,7 @@ def generate_text(
         GenerationInterrupted: Geração cancelada; contém o fragmento.
     """
     if timeout is None:
-        timeout = REQUEST_TIMEOUT
+        timeout = config.REQUEST_TIMEOUT
 
     options = {
         "temperature": temperature,
@@ -106,7 +112,7 @@ def generate_text(
         # stream=True no requests habilita leitura incremental
         # timeout é uma tupla (connect_timeout, read_timeout)
         response = requests.post(
-            OLLAMA_GENERATE_URL,
+            config.OLLAMA_GENERATE_URL,
             json=payload,
             stream=True,
             timeout=(30, timeout),  # 30s para conectar, timeout para ler
@@ -176,7 +182,7 @@ def generate_text(
     except requests.ConnectionError as e:
         raise OllamaError(
             "Não foi possível conectar ao Ollama. "
-            f"Verifique se o servidor está rodando em {OLLAMA_BASE_URL}.\n"
+            f"Verifique se o servidor está rodando em {config.OLLAMA_BASE_URL}.\n"
             f"Detalhes: {e}"
         ) from e
 
@@ -190,7 +196,7 @@ def generate_text(
             ) from e
         raise OllamaError(
             f"Timeout de {timeout}s atingido esperando resposta do Ollama. "
-            "Tente aumentar REQUEST_TIMEOUT no .env."
+            "Aumente o timeout em ⚙ Configurações."
         ) from e
 
     except requests.RequestException as e:

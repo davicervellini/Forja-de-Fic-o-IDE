@@ -83,7 +83,9 @@ def build_registro_modelo(project_dir: str | Path) -> tuple[bool, str]:
     if not fonte.exists():
         return False, f"Arquivo não encontrado: {fonte.name}"
 
-    texto_fonte = read_file(fonte)
+    # As listas das seções 5.8 e 9.5 vêm dos metadados (abas do editor), não do texto.
+    from pipeline.akashic_sync import sync_text
+    texto_fonte = sync_text(read_file(fonte))
     linhas = texto_fonte.splitlines()
 
     partes = list(MODEL_HEADER)

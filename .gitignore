@@ -41,3 +41,7 @@ projetos/
 
 # PyInstaller Extras
 *.spec
+
+# Dados locais do app (modo desenvolvimento/portátil)
+config.json
+logs/

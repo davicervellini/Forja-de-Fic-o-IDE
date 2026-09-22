@@ -16,6 +16,12 @@ from pipeline.io_utils import read_file, write_file
 
 logger = logging.getLogger(__name__)
 
+# Estado da história salvo antes de cada capítulo rodar, dentro da pasta do capítulo.
+# Permite desfazer o que o capítulo deixou na memória ao excluí-lo.
+SNAPSHOT_FILENAME = "estado_anterior.json"
+# Capítulos excluídos vão para cá em vez de serem apagados.
+TRASH_DIRNAME = "_lixeira"
+
 
 @dataclass
 class ChapterEntry:
@@ -189,9 +195,9 @@ class StoryProject:
 
     # ── Salvamento de estado ─────────────────────────────────
 
-    def save_state(self):
-        """Persiste o estado completo do pipeline no disco."""
-        state = {
+    def snapshot_state(self) -> dict:
+        """Cópia do estado da história em memória, no mesmo formato do estado.json."""
+        return {
             "last_chapter_num": self.last_chapter_num,
             "accumulated_summaries": [
                 [num, text] for num, text in self.accumulated_summaries
@@ -201,6 +207,28 @@ class StoryProject:
             "character_roster": self.character_roster,
             "open_threads": self.open_threads,
         }
+
+    def restore_state(self, snap: dict):
+        """Volta o estado em memória para um snapshot. Chaves ausentes voltam ao estado vazio."""
+        self.last_chapter_num = int(snap.get("last_chapter_num", 0))
+        self.accumulated_summaries = [
+            (int(n), t) for n, t in snap.get("accumulated_summaries", [])
+        ]
+        self.story_so_far = snap.get("story_so_far", "")
+        self.dynamic_memory = snap.get("dynamic_memory", "")
+        self.character_roster = snap.get("character_roster", "")
+        self.open_threads = snap.get("open_threads", "")
+
+    def save_chapter_snapshot(self, chapter_num: int, snap: dict):
+        """Guarda o estado de antes do capítulo na pasta dele."""
+        write_file(
+            self.chapter_dir(chapter_num) / SNAPSHOT_FILENAME,
+            json.dumps(snap, ensure_ascii=False, indent=2),
+        )
+
+    def save_state(self):
+        """Persiste o estado completo do pipeline no disco."""
+        state = self.snapshot_state()
         write_file(self.state_path, json.dumps(state, ensure_ascii=False, indent=2))
 
         # Também salva os arquivos markdown individuais (legibilidade)
@@ -293,15 +321,57 @@ class StoryProject:
             return 1
         return max(e.num for e in entries) + 1
 
-    def delete_chapter(self, chapter_num: int) -> bool:
-        """Remove a pasta de um capítulo do disco. Retorna True se removeu."""
+    def delete_chapter(self, chapter_num: int) -> str:
+        """
+        Tira um capítulo do projeto e desfaz o que ele deixou na memória da história.
+
+        A pasta vai para `_lixeira/` em vez de ser apagada. O estado é ajustado assim:
+        - sem capítulo concluído depois dele e com snapshot: volta ao estado de antes dele;
+        - sem snapshot e sem nenhum outro capítulo concluído: estado zerado;
+        - nos outros casos: só o resumo dele sai; memória, roster e threads ficam,
+          porque capítulos posteriores já foram escritos em cima deles.
+
+        Salva o estado e retorna uma mensagem legível.
+        """
         import shutil
+
         ch_dir = self.chapter_dir(chapter_num)
-        if ch_dir.exists() and ch_dir.is_dir():
-            shutil.rmtree(ch_dir)
-            logger.info(f"Capítulo {chapter_num:02d} removido do disco: {ch_dir}")
-            return True
-        return False
+        if not ch_dir.is_dir():
+            return f"Capítulo {chapter_num:02d} não existe no disco."
+
+        entries = self.scan_chapters()
+        later_done = [e.num for e in entries if e.num > chapter_num and e.status == "done"]
+        other_done = [e.num for e in entries if e.num != chapter_num and e.status == "done"]
+        snap_path = ch_dir / SNAPSHOT_FILENAME
+
+        if not later_done and snap_path.exists():
+            self.restore_state(json.loads(read_file(snap_path)))
+            effect = "memória da história voltou ao estado de antes dele"
+        elif not other_done:
+            self.restore_state({})
+            effect = "memória da história zerada"
+        else:
+            self.accumulated_summaries = [
+                (n, t) for n, t in self.accumulated_summaries if n != chapter_num
+            ]
+            effect = (
+                "resumo removido; memória, roster e threads ainda têm fatos dele, "
+                "porque capítulos posteriores foram escritos em cima deles"
+            )
+
+        trash = self.project_dir / TRASH_DIRNAME
+        trash.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = trash / f"{ch_dir.name}_{stamp}"
+        shutil.move(str(ch_dir), str(dest))
+
+        remaining_done = [e.num for e in self.scan_chapters() if e.status == "done"]
+        self.last_chapter_num = max(remaining_done, default=0)
+        self.save_state()
+
+        msg = f"Capítulo {chapter_num:02d} movido para {TRASH_DIRNAME}/{dest.name}; {effect}."
+        logger.info(msg)
+        return msg
 
     # ── Listagem de projetos ─────────────────────────────────
 
@@ -344,6 +414,18 @@ class StoryProject:
         if project_dir.exists():
             shutil.rmtree(project_dir)
             logger.info(f"Projeto removido: {project_dir}")
+
+    @staticmethod
+    def trash_project(project_dir: Path) -> Path:
+        """Move o projeto para `_lixeira/` dentro da pasta de projetos, em vez de apagar."""
+        import shutil
+        project_dir = Path(project_dir)
+        trash = project_dir.parent / TRASH_DIRNAME
+        trash.mkdir(parents=True, exist_ok=True)
+        dest = trash / f"{project_dir.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        shutil.move(str(project_dir), str(dest))
+        logger.info(f"Projeto movido para a lixeira: {dest}")
+        return dest
 
     # ── Utilitários ──────────────────────────────────────────
 

@@ -36,7 +36,25 @@ ollama serve
 
 ## Uso
 
-### Interface Gráfica (recomendado)
+### Interface nova (janela web, em construção)
+
+```powershell
+python app_desktop.py            # janela própria (WebView2)
+python app_desktop.py --browser  # abre no navegador padrão
+```
+
+A API local (`webapp/server.py`, FastAPI) roda só em 127.0.0.1. Nesta interface dá para
+criar e abrir projetos, adicionar capítulos, gerar com o texto aparecendo ao vivo,
+cancelar, editar o texto final, refazer um capítulo (com a premissa ajustada), atualizar
+a memória depois de uma edição, ver e restaurar versões anteriores, editar a memória da
+história e o Registro Akáshico em texto, exportar o livro (EPUB, Markdown, TXT, HTML) e
+mudar as configurações. O editor do Registro por abas, o assistente de criação e a
+importação da wiki continuam na interface antiga até serem migrados.
+
+Toda edição, refação ou restauração guarda antes o texto anterior em
+`capitulos/capitulo_NN/versoes/`.
+
+### Interface Gráfica antiga (customtkinter)
 
 ```powershell
 python gui.py

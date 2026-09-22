@@ -7,9 +7,11 @@ Coordena as fases:
 """
 
 import logging
+import shutil
 import threading
 from dataclasses import dataclass, field
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
 from pipeline import config
 from pipeline.project import StoryProject
@@ -31,10 +33,44 @@ from pipeline.prompts import (
     build_merging_prompt,
     build_consistency_prompt,
     parse_updating_output,
+    SYSTEM_SCENE_PLANNER,
+    build_scene_prompt,
+    build_planner_prompt,
+    scene_guidance,
+)
+from pipeline.akashic_schema import read_meta
+from pipeline.chapters import (
+    VERSIONED_FILES,
+    archive_version,
+    later_done,
+    load_snapshot,
+    update_info,
 )
 from pipeline.akashic import extract_style_block
+from pipeline.scenes import (
+    Scene,
+    assemble_chapter,
+    clean_scene,
+    count_words,
+    drop_new_system_lines,
+    drop_overlap,
+    last_sentence,
+    ngrams_of,
+    parse_premise,
+    remove_repeated_sentences,
+    remove_repetition,
+    split_chapter,
+    tail_words,
+    trim_incomplete_ending,
+)
 
 logger = logging.getLogger(__name__)
+
+_MIDDLE_NOTE = (
+    "Refeito depois de capítulos posteriores: só o resumo foi trocado. Memória, roster e "
+    "threads continuam com fatos da versão anterior, porque os capítulos seguintes foram "
+    "escritos em cima deles."
+)
 
 
 @dataclass
@@ -105,20 +141,50 @@ class PipelineOrchestrator:
         if self.cancel_event.is_set():
             raise GenerationInterrupted("", "Pipeline cancelado pelo usuário.")
 
-    def _run_drafting(self, premise: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
-        callbacks.on_status(
-            f"Capítulo {chapter_num:02d} — Fase 1: Rascunho ({self.model_drafting})"
+    # ─── Rascunho cena por cena ─────────────────────────────
+
+    def _previous_chapter_tail(self, chapter_num: int) -> str:
+        path = self.project.chapter_dir(chapter_num - 1) / "capitulo_final.md"
+        if chapter_num <= 1 or not path.exists():
+            return ""
+        _, scenes = split_chapter(path.read_text(encoding="utf-8"))
+        return tail_words("\n\n".join(scenes), config.PREVIOUS_CHAPTER_TAIL_WORDS)
+
+    def _plan_scenes(self, premise: str, chapter_num: int, callbacks: PipelineCallbacks):
+        """Cenas da premissa. Sem cenas numeradas, o próprio modelo divide a premissa em cenas."""
+        plan = parse_premise(premise)
+        if plan.scenes:
+            return plan
+        callbacks.on_status(f"Capítulo {chapter_num:02d} — Dividindo a premissa em cenas")
+        raw = generate_text(
+            model=self.model_drafting,
+            system_prompt=SYSTEM_SCENE_PLANNER,
+            user_prompt=build_planner_prompt(premise, self.akashic_records),
+            temperature=0.3,
+            num_ctx=self.drafting_num_ctx,
+            timeout=self.request_timeout,
+            on_token=lambda token: None,
+            cancel_event=self.cancel_event,
+            extra_options=self.drafting_extra or None,
         )
-        user_prompt = build_drafting_prompt(
-            premise=premise,
-            akashic_records=self.akashic_records,
-            story_so_far=self.project.story_so_far,
-            recent_summaries=self.project.accumulated_summaries,
-            dynamic_memory=self.project.dynamic_memory,
-            character_roster=self.project.character_roster,
-            open_threads=self.project.open_threads,
-        )
-        draft = generate_text(
+        planned = parse_premise("Scenes:\n" + raw)
+        planned.title = plan.title
+        planned.hook = planned.hook or plan.hook
+        if not planned.scenes:
+            logger.warning("O modelo não devolveu cenas numeradas; a premissa vira uma cena só.")
+            planned.scenes = [Scene(num=1, text=premise.strip())]
+        else:
+            write_file(self.project.chapter_dir(chapter_num) / "cenas_planejadas.md", raw.strip())
+        return planned
+
+    def _generate_scene_text(self, user_prompt: str, target_words: int, callbacks: PipelineCallbacks) -> str:
+        options: dict[str, Any] = dict(self.drafting_extra)
+        # Teto de ~1,4x a meta: acima disso o modelo pequeno costuma entrar em laço ou invadir a próxima cena.
+        options["num_predict"] = int(target_words * 1.33 * 1.4) + 150
+        options["repeat_penalty"] = config.DRAFTING_REPEAT_PENALTY
+        # O padrão do Ollama olha só os últimos 64 tokens, curto demais para pegar frases repetidas.
+        options["repeat_last_n"] = config.DRAFTING_REPEAT_LAST_N
+        return generate_text(
             model=self.model_drafting,
             system_prompt=SYSTEM_DRAFTING,
             user_prompt=user_prompt,
@@ -127,39 +193,167 @@ class PipelineOrchestrator:
             timeout=self.request_timeout,
             on_token=lambda token: callbacks.on_token("drafting", token),
             cancel_event=self.cancel_event,
-            extra_options=self.drafting_extra or None,
+            extra_options=options,
         )
+
+    def _protagonist_voice(self) -> str:
+        """Ficha curta do(s) protagonista(s), lida dos metadados do Registro Akáshico."""
+        path = self.project.akashic_path
+        if not path.exists():
+            return ""
+        meta, _ = read_meta(path.read_text(encoding="utf-8"))
+        if meta is None:
+            return ""
+        heroes = [c for c in meta.characters if c.role == "protagonist" and c.sheet.strip()]
+        return " ".join(f"{c.name}: {c.sheet.strip()}" for c in heroes[:2])
+
+    @staticmethod
+    def _clean_generated(raw: str, seen: set, previous_text: str) -> str:
+        """Limpeza determinística do que o modelo escreveu: título solto, frase cortada, laços e recomeços."""
+        text = trim_incomplete_ending(clean_scene(raw))
+        text = remove_repetition(text)
+        if previous_text.strip():
+            text = drop_overlap(text, previous_text)
+        return remove_repeated_sentences(text, seen)
+
+    def _run_drafting(self, premise: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
+        plan = self._plan_scenes(premise, chapter_num, callbacks)
+        scenes = plan.scenes
+        total = len(scenes)
+        default_target = max(250, config.CHAPTER_TARGET_WORDS // total)
+        title = plan.title or f"Chapter {chapter_num}"
+        prev_tail = self._previous_chapter_tail(chapter_num)
+        voice = self._protagonist_voice()
+        common: dict[str, Any] = dict(
+            premise=premise,
+            akashic_records=self.akashic_records,
+            chapter_num=chapter_num,
+            scene_total=total,
+            hook=plan.hook,
+            story_so_far=self.project.story_so_far,
+            recent_summaries=self.project.accumulated_summaries,
+            dynamic_memory=self.project.dynamic_memory,
+            character_roster=self.project.character_roster,
+            open_threads=self.project.open_threads,
+            previous_chapter_tail=prev_tail,
+        )
+        # Sequências de palavras já usadas (inclusive no fim do capítulo anterior): frases que as
+        # repetem são laço ou recomeço, e saem do texto.
+        seen = ngrams_of(prev_tail)
+
+        written: list[str] = []
+        callbacks.on_token("drafting", title + "\n\n")
+        for i, scene in enumerate(scenes, start=1):
+            self._check_cancelled()
+            target = scene.target_words or default_target
+            next_text = scenes[i].text if i < total else ""
+            if i > 1:
+                callbacks.on_token("drafting", f"\n\n{config.SCENE_BREAK}\n\n")
+            text = ""
+            try:
+                callbacks.on_status(
+                    f"Capítulo {chapter_num:02d} — Rascunho: cena {i}/{total}, ~{target} palavras ({self.model_drafting})"
+                )
+                chapter_text = "\n\n".join(written)
+                so_far = tail_words(chapter_text, config.CHAPTER_SO_FAR_TAIL_WORDS)
+                guidance = scene_guidance(next_text, last_sentence(chapter_text or prev_tail), voice)
+                raw = self._generate_scene_text(
+                    build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=target,
+                                       chapter_so_far=so_far, guidance=guidance, **common),
+                    target, callbacks,
+                )
+                text = self._clean_generated(raw, seen, chapter_text or prev_tail)
+                for _ in range(config.SCENE_MAX_CONTINUATIONS):
+                    if count_words(text) >= target * config.SCENE_MIN_RATIO:
+                        break
+                    missing = target - count_words(text)
+                    callbacks.on_status(
+                        f"Capítulo {chapter_num:02d} — Cena {i}/{total} curta ({count_words(text)} palavras); continuando"
+                    )
+                    callbacks.on_token("drafting", "\n\n")
+                    guidance = scene_guidance(next_text, last_sentence(text), voice)
+                    raw = self._generate_scene_text(
+                        build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=missing,
+                                           chapter_so_far=so_far, scene_so_far=text, guidance=guidance, **common),
+                        missing, callbacks,
+                    )
+                    more = self._clean_generated(raw, seen, f"{chapter_text}\n\n{text}")
+                    if count_words(more) < 40:
+                        break
+                    text = f"{text}\n\n{more}"
+            except GenerationInterrupted as e:
+                partial = assemble_chapter(title, written + [f"{text}\n\n{e.fragment}".strip()], config.SCENE_BREAK)
+                raise GenerationInterrupted(partial, str(e)) from e
+            logger.info(f"Cap {chapter_num:02d} — cena {i}/{total}: {count_words(text)} palavras (meta {target})")
+            written.append(text)
+
+        draft = assemble_chapter(title, written, config.SCENE_BREAK)
         chapter_dir = self.project.chapter_dir(chapter_num)
         write_file(chapter_dir / "rascunho.md", draft)
-        logger.info(f"Cap {chapter_num:02d} — Rascunho salvo ({len(draft)} chars)")
+        logger.info(f"Cap {chapter_num:02d} — Rascunho salvo ({count_words(draft)} palavras, {total} cenas)")
         callbacks.on_phase_complete("drafting", draft, chapter_num)
         return draft
 
+    # ─── Polimento cena por cena ────────────────────────────
+
     def _run_refining(self, draft: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
         self._check_cancelled()
-        callbacks.on_status(
-            f"Capítulo {chapter_num:02d} — Fase 2: Polimento ({self.model_refining})"
-        )
+        title, scenes = split_chapter(draft)
         style_block = extract_style_block(self.akashic_records)
-        user_prompt = build_refining_prompt(draft, style_block=style_block)
-        final = generate_text(
-            model=self.model_refining,
-            system_prompt=SYSTEM_REFINING,
-            user_prompt=user_prompt,
-            temperature=self.refining_temperature,
-            num_ctx=self.refining_num_ctx,
-            timeout=self.request_timeout,
-            on_token=lambda token: callbacks.on_token("refining", token),
-            cancel_event=self.cancel_event,
-            extra_options=self.refining_extra or None,
-        )
+        total = len(scenes)
+        polished: list[str] = []
+        rejected: list[str] = []
+        if title:
+            callbacks.on_token("refining", title + "\n\n")
+        for i, scene in enumerate(scenes, start=1):
+            self._check_cancelled()
+            if i > 1:
+                callbacks.on_token("refining", f"\n\n{config.SCENE_BREAK}\n\n")
+            callbacks.on_status(
+                f"Capítulo {chapter_num:02d} — Polimento: cena {i}/{total} ({self.model_refining})"
+            )
+            options: dict[str, Any] = dict(self.refining_extra)
+            options["num_predict"] = int(count_words(scene) * 1.33 * 1.6) + 200
+            try:
+                out = generate_text(
+                    model=self.model_refining,
+                    system_prompt=SYSTEM_REFINING,
+                    user_prompt=build_refining_prompt(scene, style_block=style_block,
+                                                      scene_label=f"scene {i} of {total} of a chapter"),
+                    temperature=self.refining_temperature,
+                    num_ctx=self.refining_num_ctx,
+                    timeout=self.request_timeout,
+                    on_token=lambda token: callbacks.on_token("refining", token),
+                    cancel_event=self.cancel_event,
+                    extra_options=options,
+                )
+            except GenerationInterrupted as e:
+                partial = assemble_chapter(title, polished + scenes[i - 1:], config.SCENE_BREAK)
+                raise GenerationInterrupted(partial, str(e)) from e
+            out = drop_new_system_lines(clean_scene(out), scene)
+            before, after = count_words(scene), count_words(out)
+            if after < before * config.REFINE_MIN_RATIO:
+                logger.warning(
+                    f"Cap {chapter_num:02d} — polimento da cena {i} encolheu ({before} → {after} palavras); "
+                    "mantendo o rascunho da cena"
+                )
+                rejected.append(f"## Cena {i} ({before} → {after} palavras)\n\n{out}")
+                out = scene
+            polished.append(out)
+
+        final = assemble_chapter(title, polished, config.SCENE_BREAK)
         chapter_dir = self.project.chapter_dir(chapter_num)
+        if rejected:
+            # Guardado para comparação: o capítulo final usa o rascunho dessas cenas.
+            write_file(chapter_dir / "polimento_descartado.md", "\n\n".join(rejected))
         write_file(chapter_dir / "capitulo_final.md", final)
-        logger.info(f"Cap {chapter_num:02d} — Capítulo final salvo ({len(final)} chars)")
+        logger.info(f"Cap {chapter_num:02d} — Capítulo final salvo ({count_words(final)} palavras)")
         callbacks.on_phase_complete("refining", final, chapter_num)
         return final
 
-    def _run_summarizing(self, final_text: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
+    def _run_summarizing(
+        self, final_text: str, chapter_num: int, callbacks: PipelineCallbacks, record: bool = True
+    ) -> str:
         self._check_cancelled()
         callbacks.on_status(
             f"Capítulo {chapter_num:02d} — Fase 3: Resumo ({self.model_summarizing})"
@@ -176,10 +370,14 @@ class PipelineOrchestrator:
             cancel_event=self.cancel_event,
             extra_options=self.summarizing_extra or None,
         )
-        chapter_dir = self.project.chapter_dir(chapter_num)
-        write_file(chapter_dir / "resumo.md", summary)
-        self.project.accumulated_summaries.append((chapter_num, summary))
-        logger.info(f"Cap {chapter_num:02d} — Resumo salvo ({len(summary)} chars)")
+        # resumo.md só é gravado em run_single, depois que o estado inteiro foi salvo:
+        # sem ele o capítulo não conta como concluído se uma fase seguinte falhar.
+        # Um resumo anterior do mesmo capítulo (capítulo refeito) é substituído, não duplicado.
+        # record=False: só gera o texto; quem chamou decide onde ele entra.
+        if record:
+            others = [(n, t) for n, t in self.project.accumulated_summaries if n != chapter_num]
+            self.project.accumulated_summaries = sorted(others + [(chapter_num, summary)], key=lambda s: s[0])
+        logger.info(f"Cap {chapter_num:02d} — Resumo gerado ({len(summary)} chars)")
         callbacks.on_phase_complete("summarizing", summary, chapter_num)
         return summary
 
@@ -252,7 +450,7 @@ class PipelineOrchestrator:
             return
         callbacks.on_status("Fase 4: Fundindo resumos antigos (Story So Far)...")
         to_merge = self.project.accumulated_summaries[:-config.RECENT_SUMMARIES_KEPT]
-        self.project.accumulated_summaries = self.project.accumulated_summaries[-config.RECENT_SUMMARIES_KEPT:]
+        keep = self.project.accumulated_summaries[-config.RECENT_SUMMARIES_KEPT:]
         user_prompt = build_merging_prompt(self.project.story_so_far, to_merge)
         new_story = generate_text(
             model=self.model_summarizing,
@@ -265,39 +463,92 @@ class PipelineOrchestrator:
             cancel_event=self.cancel_event,
             extra_options=self.summarizing_extra or None,
         )
-        self.project.story_so_far = new_story
+        if not new_story.strip():
+            raise OllamaError("A fusão de resumos voltou vazia; nenhum resumo foi descartado.")
+        # Os resumos antigos só saem da lista depois que a fusão deu certo.
+        self.project.story_so_far = new_story.strip()
+        self.project.accumulated_summaries = keep
         logger.info(f"Story So Far atualizado ({len(self.project.story_so_far)} chars)")
 
     def _run_consistency_check(self, final_text: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
-        """Fase 5 opcional: auditoria de continuidade."""
+        """
+        Fase opcional: auditoria de continuidade.
+
+        Roda antes de a memória ser atualizada com o próprio capítulo, para comparar o
+        texto com o que já estava estabelecido. É opcional de verdade: se falhar por
+        erro ou timeout, o capítulo segue; só um cancelamento do usuário interrompe.
+        O resultado vai para consistencia.md na pasta do capítulo.
+        """
         if not config.CONSISTENCY_CHECK_ENABLED:
             return ""
         self._check_cancelled()
-        callbacks.on_status(f"Capítulo {chapter_num:02d} — Fase 5: Consistency Check")
+        callbacks.on_status(f"Capítulo {chapter_num:02d} — Checagem de consistência")
         user_prompt = build_consistency_prompt(
             akashic=self.akashic_records,
             dynamic_memory=self.project.dynamic_memory,
             roster=self.project.character_roster,
             chapter_text=final_text,
         )
-        result = generate_text(
-            model=self.model_summarizing,
-            system_prompt=SYSTEM_CONSISTENCY,
-            user_prompt=user_prompt,
-            temperature=0.1,
-            num_ctx=self.summarizing_num_ctx,
-            timeout=min(self.request_timeout, 180),
-            on_token=lambda token: None,
-            cancel_event=self.cancel_event,
-            extra_options=self.summarizing_extra or None,
-        )
+        try:
+            result = generate_text(
+                model=self.model_summarizing,
+                system_prompt=SYSTEM_CONSISTENCY,
+                user_prompt=user_prompt,
+                temperature=0.1,
+                num_ctx=self.summarizing_num_ctx,
+                timeout=min(self.request_timeout, 180),
+                on_token=lambda token: None,
+                cancel_event=self.cancel_event,
+                extra_options=self.summarizing_extra or None,
+            )
+        except (GenerationInterrupted, OllamaError) as e:
+            if self.cancel_event.is_set():
+                raise
+            notes = f"Checagem de consistência não rodou: {e}"
+            logger.warning(f"Cap {chapter_num:02d} — {notes}")
+            callbacks.on_status(f"⚠ {notes[:120]}")
+            write_file(self.project.chapter_dir(chapter_num) / "consistencia.md", notes)
+            return notes
+
         notes = result.strip()
-        if notes.upper() != "OK":
-            logger.warning(f"Cap {chapter_num:02d} — Consistency issues: {notes[:200]}")
-            callbacks.on_status(f"⚠ Consistency: {notes[:120]}...")
+        if notes.strip(" .!\n").upper() == "OK":
+            logger.info(f"Cap {chapter_num:02d} — Consistência OK")
         else:
-            logger.info(f"Cap {chapter_num:02d} — Consistency OK")
+            logger.warning(f"Cap {chapter_num:02d} — Problemas de consistência: {notes[:200]}")
+            callbacks.on_status(f"⚠ Consistência: veja consistencia.md do capítulo {chapter_num:02d}")
+        write_file(self.project.chapter_dir(chapter_num) / "consistencia.md", notes)
         return notes
+
+    def _finish_chapter(self, result: ChapterResult, chapter_num: int, callbacks: PipelineCallbacks):
+        """Do texto final em diante: resumo, consistência, memória, fusão, estado e resumo.md."""
+        chapter_dir = self.project.chapter_dir(chapter_num)
+        result.status = "summarizing"
+        result.summary = self._run_summarizing(result.final, chapter_num, callbacks)
+
+        result.consistency_notes = self._run_consistency_check(result.final, chapter_num, callbacks)
+
+        self._run_updating(result.summary, chapter_num, callbacks)
+        self._run_compress_memory(callbacks)
+        self._run_merging(callbacks)
+
+        self.project.last_chapter_num = max(self.project.last_chapter_num, chapter_num)
+        self.project.save_state()
+        # Por último: com resumo.md no disco o capítulo passa a contar como concluído.
+        write_file(chapter_dir / "resumo.md", result.summary)
+        update_info(self.project, chapter_num, memory_stale=False, memory_note="")
+
+    def _fail(self, e: Exception, result: ChapterResult, chapter_num: int, callbacks: PipelineCallbacks):
+        """Marca o resultado como erro e avisa a interface. O estado já foi restaurado por quem chamou."""
+        result.status = "error"
+        result.error = str(e)
+        if isinstance(e, GenerationInterrupted):
+            callbacks.on_status(f"⚠ Capítulo {chapter_num:02d} interrompido.")
+        elif isinstance(e, OllamaError):
+            callbacks.on_status(f"✗ Erro no capítulo {chapter_num:02d}: {e}")
+        else:
+            logger.exception(f"Erro inesperado no capítulo {chapter_num:02d}")
+            callbacks.on_status(f"✗ Erro inesperado: {e}")
+        callbacks.on_error(str(e), chapter_num)
 
     def run_single(
         self,
@@ -312,6 +563,10 @@ class PipelineOrchestrator:
         callbacks.on_chapter_start(chapter_num)
 
         chapter_dir = self.project.chapter_dir(chapter_num)
+        # Estado de antes do capítulo: volta a valer se qualquer fase falhar, e fica
+        # gravado na pasta do capítulo para a exclusão poder desfazê-lo depois.
+        before = self.project.snapshot_state()
+        self.project.save_chapter_snapshot(chapter_num, before)
         write_file(chapter_dir / "premissa.md", premise)
 
         try:
@@ -321,28 +576,15 @@ class PipelineOrchestrator:
             result.status = "polishing"
             result.final = self._run_refining(result.draft, chapter_num, callbacks)
 
-            result.status = "summarizing"
-            result.summary = self._run_summarizing(result.final, chapter_num, callbacks)
-
-            self._run_updating(result.summary, chapter_num, callbacks)
-            self._run_compress_memory(callbacks)
-            self._run_merging(callbacks)
-
-            result.consistency_notes = self._run_consistency_check(
-                result.final, chapter_num, callbacks
-            )
-
-            self.project.last_chapter_num = max(self.project.last_chapter_num, chapter_num)
-            self.project.save_state()
+            self._finish_chapter(result, chapter_num, callbacks)
 
             result.status = "done"
             callbacks.on_status(f"✓ Capítulo {chapter_num:02d} concluído!")
             callbacks.on_chapter_complete(chapter_num, result)
 
-        except GenerationInterrupted as e:
-            result.status = "error"
-            result.error = str(e)
-            if e.fragment:
+        except Exception as e:
+            self.project.restore_state(before)
+            if isinstance(e, GenerationInterrupted) and e.fragment:
                 if not result.draft:
                     save_fragment(chapter_dir / "rascunho.md", e.fragment)
                     result.draft = e.fragment
@@ -352,22 +594,156 @@ class PipelineOrchestrator:
                 elif not result.summary:
                     save_fragment(chapter_dir / "resumo.md", e.fragment)
                     result.summary = e.fragment
-            callbacks.on_status(f"⚠ Capítulo {chapter_num:02d} interrompido.")
-            callbacks.on_error(str(e), chapter_num)
+            self._fail(e, result, chapter_num, callbacks)
 
-        except OllamaError as e:
-            result.status = "error"
-            result.error = str(e)
-            callbacks.on_status(f"✗ Erro no capítulo {chapter_num:02d}: {e}")
-            callbacks.on_error(str(e), chapter_num)
+        return result
 
+    # ─── Refazer e atualizar a memória de um capítulo pronto ─
+
+    def _memory_base(self, chapter_num: int) -> dict | None:
+        """
+        Estado da história de antes do capítulo, se dá para voltar a ele com segurança:
+        nenhum capítulo concluído depois dele e um snapshot gravado (ou nenhum outro
+        capítulo concluído, e então o estado de antes é o vazio). None nos outros casos.
+        """
+        if later_done(self.project, chapter_num):
+            return None
+        snap = load_snapshot(self.project, chapter_num)
+        if snap is not None:
+            return snap
+        others = [e.num for e in self.project.scan_chapters() if e.num != chapter_num and e.status == "done"]
+        return {} if not others else None
+
+    def _put_back(self, chapter_num: int, archived):
+        """Depois de uma falha, põe de volta os textos que o capítulo tinha antes de refazer."""
+        chapter_dir = self.project.chapter_dir(chapter_num)
+        # O que a tentativa chegou a escrever fica guardado como versão, para comparação.
+        archive_version(self.project, chapter_num, "parcial")
+        for name in VERSIONED_FILES:
+            if (chapter_dir / name).exists():
+                (chapter_dir / name).unlink()
+        if archived is not None:
+            for f in Path(archived).iterdir():
+                if f.is_file():
+                    shutil.copy2(f, chapter_dir / f.name)
+
+    def redo_chapter(
+        self,
+        chapter_num: int,
+        premise: str | None = None,
+        callbacks: PipelineCallbacks | None = None,
+    ) -> ChapterResult:
+        """
+        Escreve de novo um capítulo, a partir da premissa (a nova, se vier, ou a gravada).
+
+        Os textos atuais viram uma versão em `versoes/`. Se for o último capítulo concluído,
+        a memória da história volta ao estado de antes dele e o capítulo roda inteiro, como
+        na primeira vez. Se houver capítulos concluídos depois dele, o texto é escrito com a
+        memória de antes dele como contexto, só o resumo é trocado, e memória, roster e
+        threads ficam como estão, porque os capítulos seguintes foram escritos em cima deles.
+        Se algo falhar, os textos e o estado anteriores voltam.
+        """
+        if callbacks is None:
+            callbacks = PipelineCallbacks()
+        chapter_dir = self.project.chapter_dir(chapter_num)
+        premise_path = chapter_dir / "premissa.md"
+        if premise is None:
+            premise = premise_path.read_text(encoding="utf-8") if premise_path.exists() else ""
+        premise = premise.strip()
+        if not premise:
+            raise ValueError(f"O capítulo {chapter_num:02d} não tem premissa.")
+
+        pre = self.project.snapshot_state()
+        base = self._memory_base(chapter_num)
+        archived = archive_version(self.project, chapter_num, "refazer")
+        for name in VERSIONED_FILES:
+            if name != "premissa.md" and (chapter_dir / name).exists():
+                (chapter_dir / name).unlink()
+
+        if base is not None:
+            self.project.restore_state(base)
+            result = self.run_single(premise, chapter_num, callbacks)
+            if result.status == "error":
+                self.project.restore_state(pre)
+                self.project.save_state()
+                self._put_back(chapter_num, archived)
+            return result
+
+        # Capítulo do meio: contexto de antes dele, sem mexer na memória atual.
+        result = ChapterResult(chapter_num=chapter_num, premise=premise)
+        callbacks.on_chapter_start(chapter_num)
+        snap = load_snapshot(self.project, chapter_num)
+        write_file(premise_path, premise)
+        try:
+            if snap is not None:
+                self.project.restore_state(snap)
+            try:
+                result.status = "drafting"
+                result.draft = self._run_drafting(premise, chapter_num, callbacks)
+                result.status = "polishing"
+                result.final = self._run_refining(result.draft, chapter_num, callbacks)
+                result.status = "summarizing"
+                result.summary = self._run_summarizing(result.final, chapter_num, callbacks, record=False)
+            finally:
+                self.project.restore_state(pre)
+            self._replace_summary(chapter_num, result.summary)
+            self.project.save_state()
+            write_file(chapter_dir / "resumo.md", result.summary)
+            update_info(self.project, chapter_num, memory_stale=False, memory_note=_MIDDLE_NOTE)
+            result.status = "done"
+            callbacks.on_status(f"✓ Capítulo {chapter_num:02d} refeito.")
+            callbacks.on_chapter_complete(chapter_num, result)
         except Exception as e:
-            result.status = "error"
-            result.error = str(e)
-            logger.exception(f"Erro inesperado no capítulo {chapter_num:02d}")
-            callbacks.on_status(f"✗ Erro inesperado: {e}")
-            callbacks.on_error(str(e), chapter_num)
+            self.project.restore_state(pre)
+            self._put_back(chapter_num, archived)
+            self._fail(e, result, chapter_num, callbacks)
+        return result
 
+    def _replace_summary(self, chapter_num: int, summary: str):
+        """Troca o resumo do capítulo na lista, se ele ainda estiver lá (e não fundido na história)."""
+        self.project.accumulated_summaries = [
+            (n, summary if n == chapter_num else t) for n, t in self.project.accumulated_summaries
+        ]
+
+    def refresh_memory(self, chapter_num: int, callbacks: PipelineCallbacks | None = None) -> ChapterResult:
+        """
+        Refaz resumo e memória a partir do texto final atual (depois de uma edição manual).
+
+        Último capítulo concluído: a memória volta ao estado de antes dele e é atualizada com
+        o texto novo. Capítulo do meio: só o resumo é refeito.
+        """
+        if callbacks is None:
+            callbacks = PipelineCallbacks()
+        chapter_dir = self.project.chapter_dir(chapter_num)
+        final_path = chapter_dir / "capitulo_final.md"
+        if not final_path.exists():
+            raise ValueError(f"O capítulo {chapter_num:02d} ainda não tem texto final.")
+        premise_path = chapter_dir / "premissa.md"
+        result = ChapterResult(
+            chapter_num=chapter_num,
+            premise=premise_path.read_text(encoding="utf-8") if premise_path.exists() else "",
+            final=final_path.read_text(encoding="utf-8"),
+        )
+        callbacks.on_chapter_start(chapter_num)
+        pre = self.project.snapshot_state()
+        base = self._memory_base(chapter_num)
+        try:
+            if base is not None:
+                self.project.restore_state(base)
+                self._finish_chapter(result, chapter_num, callbacks)
+            else:
+                result.status = "summarizing"
+                result.summary = self._run_summarizing(result.final, chapter_num, callbacks, record=False)
+                self._replace_summary(chapter_num, result.summary)
+                self.project.save_state()
+                write_file(chapter_dir / "resumo.md", result.summary)
+                update_info(self.project, chapter_num, memory_stale=False, memory_note=_MIDDLE_NOTE)
+            result.status = "done"
+            callbacks.on_status(f"✓ Memória atualizada com o capítulo {chapter_num:02d}.")
+            callbacks.on_chapter_complete(chapter_num, result)
+        except Exception as e:
+            self.project.restore_state(pre)
+            self._fail(e, result, chapter_num, callbacks)
         return result
 
     def run_batch(
@@ -375,17 +751,29 @@ class PipelineOrchestrator:
         premises: list[str],
         callbacks: PipelineCallbacks | None = None,
         start_from: int = 1,
+        chapter_nums: list[int] | None = None,
     ) -> list[ChapterResult]:
+        """
+        Roda os capítulos em sequência e para no primeiro erro.
+
+        `chapter_nums` traz o número real de cada premissa. Sem ele, os números são
+        consecutivos a partir de `start_from`, o que só é seguro quando os capítulos
+        pendentes não têm buracos nem capítulos prontos no meio.
+        """
         if callbacks is None:
             callbacks = PipelineCallbacks()
+
+        if chapter_nums is None:
+            chapter_nums = [start_from + i for i in range(len(premises))]
+        if len(chapter_nums) != len(premises):
+            raise ValueError("chapter_nums e premises precisam ter o mesmo tamanho.")
 
         results: list[ChapterResult] = []
         total = len(premises)
         callbacks.on_status(f"Iniciando pipeline em lote: {total} capítulo(s).")
 
-        for i, premise in enumerate(premises):
-            chapter_num = start_from + i
-            callbacks.on_status(f"═══ Capítulo {chapter_num:02d} de {start_from + total - 1:02d} ═══")
+        for i, (chapter_num, premise) in enumerate(zip(chapter_nums, premises)):
+            callbacks.on_status(f"═══ Capítulo {chapter_num:02d} ({i + 1}/{total}) ═══")
             if self.cancel_event.is_set():
                 callbacks.on_status("Pipeline cancelado pelo usuário.")
                 break

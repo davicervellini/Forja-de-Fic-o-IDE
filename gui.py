@@ -16,21 +16,14 @@ from gui_akashic import AkashicEditor, AkashicWizard
 from pipeline.akashic import build_registro_modelo
 from pipeline.akashic_builder import build_akashic
 from pipeline.api import check_ollama_health
-from pipeline.config import (
-    PROJECTS_DIR,
-    MODEL_DRAFTING,
-    MODEL_REFINING,
-    MODEL_SUMMARIZING,
-)
+from gui_settings import SettingsDialog
+# A configuração muda pela tela ⚙ Configurações: ler config.NOME na hora de usar.
+from pipeline import config
 from pipeline.io_utils import read_file, write_file
+from pipeline.logsetup import setup_logging
 from pipeline.project import StoryProject
 from pipeline.orchestrator import PipelineOrchestrator, PipelineCallbacks
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 customtkinter.set_appearance_mode("dark")
@@ -156,7 +149,21 @@ class WikiImportDialog(customtkinter.CTkToplevel):
         self.btn_start.grid(row=0, column=0, padx=4)
         self.btn_cancel = customtkinter.CTkButton(btn_frame, text="⏹ Cancelar", command=self._cancel_queue, fg_color=ACCENT_RED, state="disabled")
         self.btn_cancel.grid(row=0, column=1, padx=4)
-        customtkinter.CTkButton(btn_frame, text="Fechar", command=self.destroy, fg_color=BG_CARD, hover_color=BG_HOVER).grid(row=0, column=2, padx=4)
+        customtkinter.CTkButton(btn_frame, text="Fechar", command=self._close, fg_color=BG_CARD, hover_color=BG_HOVER).grid(row=0, column=2, padx=4)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _close(self):
+        # A fila continua até o personagem atual e salva o que já importou (ver _worker_queue).
+        if self._running:
+            self._cancel.set()
+        self.destroy()
+
+    def _ui(self, fn):
+        """Agenda uma atualização da janela; ignora se ela já foi fechada."""
+        try:
+            self.after(0, fn)
+        except Exception:
+            pass
 
     def _append_log(self, text: str):
         self.log_tb.configure(state="normal")
@@ -200,20 +207,35 @@ class WikiImportDialog(customtkinter.CTkToplevel):
         from pipeline.wiki_fetcher import add_character_to_memory
         total = len(names)
         success = 0
-        for i, char in enumerate(names):
-            if self._cancel.is_set():
-                self.after(0, lambda: self._finish_queue(f"Cancelado. Processados: {i}/{total}"))
-                return
-            self.after(0, lambda c=char, idx=i: self.status_lbl.configure(text=f"Processando {idx+1}/{total}: {c}", text_color=ACCENT))
-            try:
-                msg = add_character_to_memory(char, franchise, self.project.project_dir)
-                success += 1
-                short = msg.split("\n")[0] if msg else "OK"
-                self.after(0, lambda m=f"✓ {char}: {short}": self._append_log(m))
-            except Exception as e:
-                self.after(0, lambda m=f"✗ {char}: {e}": self._append_log(m))
-            self.after(0, lambda v=(i + 1) / total: self.progress.set(v))
-        self.after(0, lambda: self._finish_queue(f"Concluído: {success}/{total} adicionados."))
+        final_msg = None
+        try:
+            for i, char in enumerate(names):
+                if self._cancel.is_set():
+                    final_msg = f"Cancelado. Processados: {i}/{total}"
+                    break
+                self._ui(lambda c=char, idx=i: self.status_lbl.configure(text=f"Processando {idx+1}/{total}: {c}", text_color=ACCENT))
+                try:
+                    msg = add_character_to_memory(char, franchise, self.project.project_dir)
+                    success += 1
+                    short = msg.split("\n")[0] if msg else "OK"
+                    self._ui(lambda m=f"✓ {char}: {short}": self._append_log(m))
+                except Exception as e:
+                    self._ui(lambda m=f"✗ {char}: {e}": self._append_log(m))
+                self._ui(lambda v=(i + 1) / total: self.progress.set(v))
+        finally:
+            # A importação grava só o memoria_dinamica.md; o estado.json precisa ser salvo
+            # também, senão os personagens somem ao reabrir o projeto. Roda aqui, na thread,
+            # para valer mesmo se a janela for fechada no meio da fila.
+            self._persist_memory()
+        self._ui(lambda: self._finish_queue(final_msg or f"Concluído: {success}/{total} adicionados."))
+
+    def _persist_memory(self):
+        try:
+            if self.project.dynamic_memory_path.exists():
+                self.project.dynamic_memory = read_file(self.project.dynamic_memory_path)
+                self.project.save_state()
+        except Exception:
+            logger.exception("Falha ao salvar a memória depois da importação da Wiki")
 
     def _finish_queue(self, final_msg):
         self._running = False
@@ -223,11 +245,6 @@ class WikiImportDialog(customtkinter.CTkToplevel):
         self.franchise_cb.configure(state="normal")
         self.status_lbl.configure(text=final_msg, text_color=ACCENT_GREEN)
         self._append_log(final_msg)
-        try:
-            if self.project.dynamic_memory_path.exists():
-                self.project.dynamic_memory = read_file(self.project.dynamic_memory_path)
-        except Exception:
-            pass
 
 
 class EditorScreen(customtkinter.CTkFrame):
@@ -254,12 +271,15 @@ class EditorScreen(customtkinter.CTkFrame):
         bar.grid(row=0, column=0, columnspan=2, sticky="ew")
         bar.grid_columnconfigure(1, weight=1)
         bar.grid_propagate(False)
-        customtkinter.CTkButton(bar, text="← Projetos", command=self.on_close, width=100, height=30, fg_color="transparent", border_width=1, border_color=BORDER, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).grid(row=0, column=0, padx=(12, 8), pady=9)
+        self.btn_back = customtkinter.CTkButton(bar, text="← Projetos", command=self._back_to_projects, width=100, height=30, fg_color="transparent", border_width=1, border_color=BORDER, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12))
+        self.btn_back.grid(row=0, column=0, padx=(12, 8), pady=9)
         customtkinter.CTkLabel(bar, text=f"⚒  {self.project.name}", font=customtkinter.CTkFont(size=15, weight="bold"), text_color=TEXT).grid(row=0, column=1, sticky="w", padx=4)
         actions = customtkinter.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=0, column=2, padx=12, pady=6)
-        customtkinter.CTkButton(actions, text="📜 Akáshico", command=self._open_akashic_editor, width=100, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).pack(side="left", padx=3)
-        customtkinter.CTkButton(actions, text="🌐 Wiki", command=lambda: WikiImportDialog(self, self.project), width=80, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).pack(side="left", padx=3)
+        self.btn_akashic = customtkinter.CTkButton(actions, text="📜 Akáshico", command=self._open_akashic_editor, width=100, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12))
+        self.btn_akashic.pack(side="left", padx=3)
+        self.btn_wiki = customtkinter.CTkButton(actions, text="🌐 Wiki", command=self._open_wiki, width=80, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12))
+        self.btn_wiki.pack(side="left", padx=3)
         self.btn_start = customtkinter.CTkButton(actions, text="▶  Run", command=self.start_pipeline, width=90, height=28, fg_color=ACCENT_GREEN, hover_color="#059669", font=customtkinter.CTkFont(size=12, weight="bold"))
         self.btn_start.pack(side="left", padx=3)
         self.btn_cancel = customtkinter.CTkButton(actions, text="⏹", command=self.cancel_pipeline, width=36, height=28, fg_color=ACCENT_RED, state="disabled")
@@ -274,12 +294,15 @@ class EditorScreen(customtkinter.CTkFrame):
         sec.grid(row=0, column=0, padx=10, pady=(12, 6), sticky="ew")
         sec.grid_columnconfigure(1, weight=1)
         customtkinter.CTkLabel(sec, text="MODELOS", font=customtkinter.CTkFont(size=10, weight="bold"), text_color=TEXT_DIM).grid(row=0, column=0, columnspan=2, padx=10, pady=(8, 4), sticky="w")
-        for i, (lbl, attr, val) in enumerate([("Fase 1", "model_draft_entry", MODEL_DRAFTING), ("Fase 2", "model_refine_entry", MODEL_REFINING), ("Fase 3", "model_summ_entry", MODEL_SUMMARIZING)], start=1):
+        self.model_lbls = {}
+        for i, (lbl, key) in enumerate([("Rascunho", "MODEL_DRAFTING"), ("Polimento", "MODEL_REFINING"), ("Resumo", "MODEL_SUMMARIZING")], start=1):
             customtkinter.CTkLabel(sec, text=lbl, font=customtkinter.CTkFont(size=11), text_color=TEXT_DIM).grid(row=i, column=0, padx=(10, 4), pady=2, sticky="w")
-            ent = customtkinter.CTkEntry(sec, height=26, font=customtkinter.CTkFont(size=11), fg_color=BG_DARK, border_color=BORDER)
-            ent.insert(0, val)
-            ent.grid(row=i, column=1, padx=(0, 10), pady=2, sticky="ew")
-            setattr(self, attr, ent)
+            val = customtkinter.CTkLabel(sec, text="", font=customtkinter.CTkFont(size=11), text_color=TEXT, anchor="w")
+            val.grid(row=i, column=1, padx=(0, 10), pady=2, sticky="ew")
+            self.model_lbls[key] = val
+        self.btn_settings = customtkinter.CTkButton(sec, text="⚙ Configurações", height=26, command=self._open_settings, fg_color=BG_HOVER, font=customtkinter.CTkFont(size=11))
+        self.btn_settings.grid(row=4, column=0, columnspan=2, padx=10, pady=(4, 10), sticky="ew")
+        self._refresh_model_labels()
         has_ak = self.project.akashic_model_path.exists() or self.project.akashic_path.exists()
         self.akashic_lbl = customtkinter.CTkLabel(side, text="● Registro Akáshico OK" if has_ak else "○ Sem Registro Akáshico", text_color=ACCENT_GREEN if has_ak else ACCENT_RED, font=customtkinter.CTkFont(size=11))
         self.akashic_lbl.grid(row=1, column=0, padx=14, pady=(4, 8), sticky="w")
@@ -287,8 +310,10 @@ class EditorScreen(customtkinter.CTkFrame):
         hdr.grid(row=2, column=0, padx=10, pady=(4, 2), sticky="ew")
         hdr.grid_columnconfigure(0, weight=1)
         customtkinter.CTkLabel(hdr, text="CAPÍTULOS", font=customtkinter.CTkFont(size=10, weight="bold"), text_color=TEXT_DIM).grid(row=0, column=0, sticky="w")
-        customtkinter.CTkButton(hdr, text="+", width=28, height=24, command=self._add, fg_color=ACCENT_GREEN, hover_color="#059669", font=customtkinter.CTkFont(size=14, weight="bold")).grid(row=0, column=1, padx=(4, 0))
-        customtkinter.CTkButton(hdr, text="−", width=28, height=24, command=self._rem, fg_color=BG_CARD, hover_color=ACCENT_RED, font=customtkinter.CTkFont(size=14, weight="bold")).grid(row=0, column=2, padx=(2, 0))
+        self.btn_add = customtkinter.CTkButton(hdr, text="+", width=28, height=24, command=self._add, fg_color=ACCENT_GREEN, hover_color="#059669", font=customtkinter.CTkFont(size=14, weight="bold"))
+        self.btn_add.grid(row=0, column=1, padx=(4, 0))
+        self.btn_rem = customtkinter.CTkButton(hdr, text="−", width=28, height=24, command=self._rem, fg_color=BG_CARD, hover_color=ACCENT_RED, font=customtkinter.CTkFont(size=14, weight="bold"))
+        self.btn_rem.grid(row=0, column=2, padx=(2, 0))
         self.queue_scroll = customtkinter.CTkScrollableFrame(side, fg_color=BG_SIDE, scrollbar_button_color=BORDER)
         self.queue_scroll.grid(row=3, column=0, padx=6, pady=4, sticky="nsew")
         self.queue_scroll.grid_columnconfigure(0, weight=1)
@@ -314,11 +339,13 @@ class EditorScreen(customtkinter.CTkFrame):
         rf = self.tabview.tab("Roster")
         self.roster_tb = customtkinter.CTkTextbox(rf, font=font, fg_color=BG_DARK)
         self.roster_tb.pack(fill="both", expand=True, padx=2, pady=(2, 0))
-        customtkinter.CTkButton(rf, text="💾 Salvar Roster", command=self._save_roster, fg_color=ACCENT_GREEN, height=28, width=140).pack(pady=6)
+        self.btn_save_roster = customtkinter.CTkButton(rf, text="💾 Salvar Roster", command=self._save_roster, fg_color=ACCENT_GREEN, height=28, width=140)
+        self.btn_save_roster.pack(pady=6)
         tf = self.tabview.tab("Threads")
         self.threads_tb = customtkinter.CTkTextbox(tf, font=font, fg_color=BG_DARK)
         self.threads_tb.pack(fill="both", expand=True, padx=2, pady=(2, 0))
-        customtkinter.CTkButton(tf, text="💾 Salvar Open Threads", command=self._save_threads, fg_color=ACCENT_GREEN, height=28, width=160).pack(pady=6)
+        self.btn_save_threads = customtkinter.CTkButton(tf, text="💾 Salvar Open Threads", command=self._save_threads, fg_color=ACCENT_GREEN, height=28, width=160)
+        self.btn_save_threads.pack(pady=6)
         self.log_tb = customtkinter.CTkTextbox(self.tabview.tab("Log"), state="disabled", font=customtkinter.CTkFont(size=12), fg_color=BG_DARK, text_color=TEXT_DIM)
         self.log_tb.pack(fill="both", expand=True, padx=2, pady=2)
 
@@ -346,6 +373,66 @@ class EditorScreen(customtkinter.CTkFrame):
         if self.queue_items:
             self._refresh_queue_list()
             self._select_queue_item(len(self.queue_items) - 1)
+
+    def _set_busy(self, busy: bool):
+        """Trava tudo que mexe no projeto enquanto o pipeline roda."""
+        state = "disabled" if busy else "normal"
+        for btn in (self.btn_back, self.btn_akashic, self.btn_wiki, self.btn_add,
+                    self.btn_rem, self.btn_save_roster, self.btn_save_threads, self.btn_settings):
+            btn.configure(state=state)
+        self.btn_start.configure(state=state)
+        self.btn_cancel.configure(state="normal" if busy else "disabled")
+
+    def _refresh_model_labels(self):
+        for key, lbl in self.model_lbls.items():
+            lbl.configure(text=getattr(config, key))
+
+    def _open_settings(self):
+        if not self.is_running:
+            SettingsDialog(self, on_saved=self._refresh_model_labels)
+
+    def _back_to_projects(self):
+        if self.is_running:
+            messagebox.showwarning("Geração em andamento", "Cancele a geração (⏹) antes de voltar para os projetos.")
+            return
+        self._store_premise()
+        self.on_close()
+
+    def _open_wiki(self):
+        if not self.is_running:
+            WikiImportDialog(self, self.project)
+
+    def request_close(self, then):
+        """
+        Fecha com segurança: se o pipeline estiver rodando, cancela e espera a thread
+        terminar sem travar a janela, salva o estado e só então chama `then`.
+        """
+        self._store_premise()
+        if not self.is_running:
+            then()
+            return
+        self.cancel_event.set()
+        self.status_label.configure(text="Cancelando a geração para fechar...")
+
+        def poll():
+            if self.pipeline_thread and self.pipeline_thread.is_alive():
+                self.after(200, poll)
+                return
+            self.project.save_state()
+            then()
+
+        poll()
+
+    def _store_premise(self):
+        """Guarda na fila e no disco a premissa que está na aba, se ela mudou."""
+        if self.selected_index is None or self.selected_index >= len(self.queue_items):
+            return
+        item = self.queue_items[self.selected_index]
+        text = self.premise_tb.get("0.0", "end").strip()
+        if text and text != (item.get("premise") or "").strip():
+            item["premise"] = text
+            if item["status"] != "done":
+                write_file(self.project.chapter_dir(item["num"]) / "premissa.md", text)
 
     def _open_akashic_editor(self):
         """Tela de edição do Registro Akáshico (universos, personagens, texto). Importar arquivo fica dentro dela."""
@@ -387,13 +474,33 @@ class EditorScreen(customtkinter.CTkFrame):
         if self.is_running or self.selected_index is None:
             return
         item = self.queue_items[self.selected_index]
-        chapter_num = item.get("num")
-        if chapter_num is not None:
-            if messagebox.askyesno("Confirmar", f"Remover Capítulo {chapter_num:02d} do disco também?"):
-                self.project.delete_chapter(chapter_num)
+        num = item["num"]
+        later_done = [i["num"] for i in self.queue_items if i["num"] > num and i["status"] == "done"]
+        warn = ""
+        if later_done:
+            nums = ", ".join(f"{n:02d}" for n in later_done)
+            warn = (f"\n\nAtenção: os capítulos {nums} vêm depois e foram escritos com este na memória. "
+                    "O resumo dele sai, mas a memória, o roster e os threads continuam com fatos dele.")
+        if not messagebox.askyesno(
+            "Excluir capítulo",
+            f"Excluir o Capítulo {num:02d}?\n\nA pasta vai para a lixeira do projeto (_lixeira) "
+            f"e a memória da história é ajustada.{warn}",
+        ):
+            return
+        msg = self.project.delete_chapter(num)
         self.queue_items.pop(self.selected_index)
         self.selected_index = None
         self._refresh_queue_list()
+        self._reload_story_tabs()
+        self._log(msg)
+
+    def _reload_story_tabs(self):
+        self.roster_tb.delete("0.0", "end")
+        if self.project.character_roster:
+            self.roster_tb.insert("0.0", self.project.character_roster)
+        self.threads_tb.delete("0.0", "end")
+        if self.project.open_threads:
+            self.threads_tb.insert("0.0", self.project.open_threads)
 
     def _refresh_queue_list(self):
         for w in self.queue_scroll.winfo_children():
@@ -405,6 +512,8 @@ class EditorScreen(customtkinter.CTkFrame):
             btn.grid(row=i, column=0, padx=2, pady=1, sticky="ew")
 
     def _select_queue_item(self, idx: int):
+        if idx != self.selected_index:
+            self._store_premise()
         self.selected_index = idx
         item = self.queue_items[idx]
         self.premise_tb.delete("0.0", "end")
@@ -448,15 +557,13 @@ class EditorScreen(customtkinter.CTkFrame):
     def start_pipeline(self):
         if self.is_running or not self.queue_items:
             return
-        if self.selected_index is not None:
-            self.queue_items[self.selected_index]["premise"] = self.premise_tb.get("0.0", "end").strip()
+        self._store_premise()
         if not check_ollama_health():
             messagebox.showerror("Erro", "Ollama não está rodando.")
             return
         self.is_running = True
         self.cancel_event.clear()
-        self.btn_start.configure(state="disabled")
-        self.btn_cancel.configure(state="normal")
+        self._set_busy(True)
         self.progress_bar.configure(mode="indeterminate")
         self.progress_bar.start()
         self.pipeline_thread = threading.Thread(target=self._worker, daemon=True)
@@ -469,17 +576,17 @@ class EditorScreen(customtkinter.CTkFrame):
 
     def _worker(self):
         try:
-            model_summ = getattr(self, "model_summ_entry", None)
-            model_summ_val = model_summ.get() if model_summ else self.model_draft_entry.get()
-            orch = PipelineOrchestrator(project=self.project, cancel_event=self.cancel_event, model_drafting=self.model_draft_entry.get(), model_refining=self.model_refine_entry.get(), model_summarizing=model_summ_val)
-            to_process = [i for i in self.queue_items if i["status"] != "done"]
+            # Modelos, contextos e temperaturas vêm da configuração (tela ⚙ Configurações).
+            orch = PipelineOrchestrator(project=self.project, cancel_event=self.cancel_event)
+            to_process = sorted((i for i in self.queue_items if i["status"] != "done"), key=lambda i: i["num"])
             if not to_process:
                 return
             self._num_to_idx = {item["num"]: idx for idx, item in enumerate(self.queue_items)}
             premises = [i["premise"] for i in to_process]
-            start_from = to_process[0]["num"]
+            chapter_nums = [i["num"] for i in to_process]
             cb = PipelineCallbacks(on_status=lambda m: self.after(0, lambda: self.status_label.configure(text=m)), on_token=lambda p, t: self.after(0, lambda: self._on_token(p, t)), on_phase_complete=lambda p, t, c: self.after(0, lambda: self._on_phase(p, t, c)), on_chapter_start=lambda c: self.after(0, lambda: self._on_start(c)), on_chapter_complete=lambda c, r: self.after(0, lambda: self._on_end(c)), on_error=lambda m, c: self.after(0, lambda: self._on_err(m, c)))
-            orch.run_batch(premises, cb, start_from=start_from)
+            # Cada premissa vai com o número real do capítulo: nunca grava por cima de outro.
+            orch.run_batch(premises, cb, chapter_nums=chapter_nums)
         except Exception:
             logger.exception("Worker error")
         finally:
@@ -537,18 +644,12 @@ class EditorScreen(customtkinter.CTkFrame):
 
     def _finish(self):
         self.is_running = False
-        self.btn_start.configure(state="normal")
-        self.btn_cancel.configure(state="disabled")
+        self._set_busy(False)
         self.progress_bar.stop()
         self.progress_bar.set(1)
         self.status_label.configure(text="Pipeline parado.")
         self.project.save_state()
-        self.roster_tb.delete("0.0", "end")
-        if self.project.character_roster:
-            self.roster_tb.insert("0.0", self.project.character_roster)
-        self.threads_tb.delete("0.0", "end")
-        if self.project.open_threads:
-            self.threads_tb.insert("0.0", self.project.open_threads)
+        self._reload_story_tabs()
 
 
 class LauncherScreen(customtkinter.CTkFrame):
@@ -562,7 +663,8 @@ class LauncherScreen(customtkinter.CTkFrame):
         header.grid_columnconfigure(0, weight=1)
         header.grid_propagate(False)
         customtkinter.CTkLabel(header, text="⚒  Forja de Ficção IDE", font=customtkinter.CTkFont(size=22, weight="bold"), text_color=TEXT).grid(row=0, column=0, padx=24, pady=16, sticky="w")
-        customtkinter.CTkButton(header, text="＋  Novo Projeto", command=self._new_project, fg_color=ACCENT_GREEN, hover_color="#059669", width=140, height=34, font=customtkinter.CTkFont(size=13, weight="bold")).grid(row=0, column=1, padx=24, pady=14)
+        customtkinter.CTkButton(header, text="⚙  Configurações", command=lambda: SettingsDialog(self), fg_color=BG_CARD, hover_color=BG_HOVER, width=140, height=34, font=customtkinter.CTkFont(size=13)).grid(row=0, column=1, padx=(24, 6), pady=14)
+        customtkinter.CTkButton(header, text="＋  Novo Projeto", command=self._new_project, fg_color=ACCENT_GREEN, hover_color="#059669", width=140, height=34, font=customtkinter.CTkFont(size=13, weight="bold")).grid(row=0, column=2, padx=(6, 24), pady=14)
         self.list_frame = customtkinter.CTkScrollableFrame(self, fg_color=BG_DARK, label_text="", scrollbar_button_color=BORDER)
         self.list_frame.grid(row=1, column=0, padx=24, pady=16, sticky="nsew")
         self.list_frame.grid_columnconfigure(0, weight=1)
@@ -571,7 +673,7 @@ class LauncherScreen(customtkinter.CTkFrame):
     def _refresh_list(self):
         for w in self.list_frame.winfo_children():
             w.destroy()
-        projects = StoryProject.list_projects(PROJECTS_DIR)
+        projects = StoryProject.list_projects(config.PROJECTS_DIR)
         if not projects:
             customtkinter.CTkLabel(self.list_frame, text="Nenhum projeto ainda.\nClique em “Novo Projeto” para começar.", text_color=TEXT_DIM, font=customtkinter.CTkFont(size=14)).grid(row=0, column=0, pady=60)
             return
@@ -602,7 +704,7 @@ class LauncherScreen(customtkinter.CTkFrame):
 
     def _create_project(self, name, answers):
         try:
-            proj = StoryProject.create(PROJECTS_DIR, name)
+            proj = StoryProject.create(config.PROJECTS_DIR, name)
             if answers:
                 write_file(proj.akashic_path, build_akashic(answers))
                 ok, msg = build_registro_modelo(proj.project_dir)
@@ -623,6 +725,8 @@ class LauncherScreen(customtkinter.CTkFrame):
 
 class AppRoot(customtkinter.CTk):
     def __init__(self):
+        config.ensure_data_dirs()
+        setup_logging()
         super().__init__()
         self.title("Forja de Ficção IDE")
         self.geometry("1380x820")
@@ -631,7 +735,29 @@ class AppRoot(customtkinter.CTk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self.current_screen = None
+        self.protocol("WM_DELETE_WINDOW", self._on_close_window)
         self.show_launcher()
+
+    def report_callback_exception(self, exc, val, tb):
+        """Erro dentro de um clique ou evento da interface: vai para o log e aparece para o usuário."""
+        logger.critical("Erro na interface", exc_info=(exc, val, tb))
+        messagebox.showerror(
+            "Erro",
+            f"Algo deu errado: {val}\n\nOs detalhes estão no log: {config.LOG_DIR}",
+        )
+
+    def _on_close_window(self):
+        screen = self.current_screen
+        if isinstance(screen, EditorScreen):
+            if screen.is_running and not messagebox.askyesno(
+                "Geração em andamento",
+                "A geração está rodando. Cancelar e fechar?\n\n"
+                "O capítulo em andamento fica incompleto e a memória da história volta ao estado de antes dele.",
+            ):
+                return
+            screen.request_close(self.destroy)
+            return
+        self.destroy()
 
     def show_launcher(self):
         if self.current_screen:

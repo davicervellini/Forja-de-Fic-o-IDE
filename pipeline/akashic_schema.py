@@ -44,8 +44,9 @@ class Universe:
     role: str = "source"
     wiki: str = ""                 # subdomínio do Fandom (ex.: "stargate"); vazio = sem wiki
     active: bool = True            # False = reserva: cadastrado, mas fora da lista fechada da história
-    notes: str = ""
+    notes: str = ""                # ficha para o autor (seção 9.2)
     allowed_characters: list[str] = field(default_factory=list)
+    model_sheet: str = ""          # ficha curta em inglês que vai para o modelo (item da seção 9.5)
 
 
 @dataclass
@@ -56,6 +57,8 @@ class Character:
     age: str = ""
     universe: str = ""             # id do universo de origem, se houver
     notes: str = ""
+    sheet: str = ""                # ficha curta em inglês que vai para o modelo (item da seção 5.8)
+    sheet_label: str = ""          # rótulo em negrito do item na 5.8, se diferente do nome (ex.: 'Tinaia, the central AI.')
 
 
 @dataclass
@@ -67,6 +70,9 @@ class AkashicMeta:
     universes: list[Universe] = field(default_factory=list)
     characters: list[Character] = field(default_factory=list)
     answers: dict = field(default_factory=dict)   # respostas do assistente (para reabrir/refazer)
+    # True depois que as listas das seções 5.8 e 9.5 foram importadas do texto para os metadados.
+    # A partir daí essas duas listas são geradas a partir dos metadados (ver akashic_sync.py).
+    lists_synced: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -81,6 +87,7 @@ class AkashicMeta:
             universes=[Universe(**_known(u, Universe)) for u in data.get("universes", [])],
             characters=[Character(**_known(c, Character)) for c in data.get("characters", [])],
             answers=data.get("answers", {}),
+            lists_synced=bool(data.get("lists_synced", False)),
         )
 
     def universe(self, uid: str) -> Universe | None:
