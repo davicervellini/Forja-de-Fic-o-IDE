@@ -398,5 +398,17 @@
   "Nenhum serviço de lado agora.": "No service set aside now.",
   "Pronto: a próxima geração tenta a nuvem de novo.": "Done: the next generation tries the cloud again.",
   "reserva local ativa ({x})": "local fallback active ({x})",
-  "{x} indisponível ({x}). Continuando no modelo local {x}; a nuvem volta a ser tentada em {x} min.": "{x} unavailable ({x}). Continuing on the local model {x}; the cloud will be tried again in {x} min."
+  "{x} indisponível ({x}). Continuando no modelo local {x}; a nuvem volta a ser tentada em {x} min.": "{x} unavailable ({x}). Continuing on the local model {x}; the cloud will be tried again in {x} min.",
+  "✔ Aprovar e gerar": "✔ Approve and generate",
+  "Salva a premissa e gera o capítulo": "Saves the premise and generates the chapter",
+  "Premissa sugerida pelo programa, esperando sua aprovação": "Premise suggested by the program, waiting for your approval",
+  "O programa escreveu esta premissa quando o capítulo anterior terminou. Revise na aba": "The program wrote this premise when the previous chapter finished. Review it in the",
+  ", ajuste o que quiser e clique em": " tab, adjust anything you want and click",
+  ". Até lá, ▶ Gerar tudo pula este capítulo.": ". Until then, ▶ Generate all skips this chapter.",
+  "Premissa do capítulo {x} pronta para revisar.": "Premise for chapter {x} ready for review.",
+  "Premissa do capítulo {x} pronta para revisar. O modelo fugiu do formato: está no modo Texto.": "Premise for chapter {x} ready for review. The model broke the format: it is in Text mode.",
+  "Escrever a premissa do próximo capítulo quando um capítulo terminar (fica esperando sua aprovação)": "Write the next chapter's premise when a chapter finishes (it waits for your approval)",
+  "Capítulo {x} — Escrevendo a premissa para você revisar": "Chapter {x} — Writing the premise for you to review",
+  "O capítulo {x} está pronto, mas a premissa do seguinte falhou: {x}": "Chapter {x} is done, but the next premise failed: {x}",
+  "A premissa do capítulo {x} foi sugerida pelo programa e espera sua aprovação. Revise na aba Premissa e clique em ✔ Aprovar e gerar.": "The premise for chapter {x} was suggested by the program and waits for your approval. Review it in the Premise tab and click ✔ Approve and generate."
 }

@@ -70,6 +70,11 @@ memória, e tira do elenco quem ainda não estreou; **🔎 Conferir** aponta con
 antes de gerar. O elenco e as restrições da premissa vão reforçados no fim do prompt de
 cada cena, e parágrafos de narração muito longos são quebrados no fim de uma frase.
 
+Quando um capítulo termina, o programa já escreve a premissa do seguinte, com o fim do
+capítulo fresco na memória. Essa premissa fica marcada com ✎ na lista e espera sua
+revisão: ajuste na aba **Premissa** e clique em **✔ Aprovar e gerar**. Até lá, ▶ Gerar tudo
+pula o capítulo. A opção fica em ⚙ Configurações.
+
 O programa trabalha com dois idiomas. O **idioma da interface** (⚙ Configurações) vale
 para a tela e para tudo o que o programa escreve para você ler: resumos, memória, fichas
 de personagens e locais, sugestões e conferências de premissa. O **idioma da história**

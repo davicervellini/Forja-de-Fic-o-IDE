@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pipeline.orchestrator as orch_mod
 from pipeline import config
 from pipeline import premise as P
+from pipeline import premise_flow
 from pipeline import prompts
 from pipeline.akashic_schema import AkashicMeta, Character, write_meta
 from pipeline.orchestrator import PipelineOrchestrator
@@ -27,6 +28,7 @@ FORM = P.PremiseForm(
     must_include="one [System] line",
     must_not="other people, darkness at the start",
 )
+from tests.isolamento import local_only
 
 
 def test_formulario_vira_texto_que_o_pipeline_le_e_volta_igual():
@@ -114,7 +116,6 @@ def test_rascunho_leva_elenco_e_abertura_da_premissa(tmp_path):
 
 def test_api_formulario_sugestao_e_conferencia(tmp_path):
     from fastapi.testclient import TestClient
-    import pipeline.api as api_mod
     import webapp.server as srv
 
     root = tmp_path / "projetos"
@@ -129,9 +130,9 @@ def test_api_formulario_sugestao_e_conferencia(tmp_path):
         assert system_prompt == P.SYSTEM_PREMISE_CHECKER
         return "- A abertura contradiz o capítulo anterior."
 
-    with patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
+    with local_only(), patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
             patch.object(srv, "check_ollama_health", lambda **kw: True), \
-            patch.object(api_mod, "generate_text", fake_generate):
+            patch.object(premise_flow, "generate_text", fake_generate):
         c = TestClient(srv.create_app())
         jobs = c.app.state.jobs
         slug = proj.project_dir.name

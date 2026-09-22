@@ -329,7 +329,8 @@ class StoryProject:
         - sem capítulo concluído depois dele e com snapshot: volta ao estado de antes dele;
         - sem snapshot e sem nenhum outro capítulo concluído: estado zerado;
         - nos outros casos: só o resumo dele sai; memória, roster e threads ficam,
-          porque capítulos posteriores já foram escritos em cima deles.
+          porque capítulos posteriores já foram escritos em cima deles;
+        - capítulo que nunca foi concluído não mexe no estado.
 
         Salva o estado e retorna uma mensagem legível.
         """
@@ -344,7 +345,11 @@ class StoryProject:
         other_done = [e.num for e in entries if e.num != chapter_num and e.status == "done"]
         snap_path = ch_dir / SNAPSHOT_FILENAME
 
-        if not later_done and snap_path.exists():
+        this_done = any(e.num == chapter_num and e.status == "done" for e in entries)
+        if not this_done and not (ch_dir / "resumo.md").exists():
+            # Capítulo nunca concluído (só premissa ou rascunho): não deixou nada na memória.
+            effect = "a memória da história não mudou, porque ele não tinha sido concluído"
+        elif not later_done and snap_path.exists():
             self.restore_state(json.loads(read_file(snap_path)))
             effect = "memória da história voltou ao estado de antes dele"
         elif not other_done:

@@ -23,6 +23,7 @@ from pipeline.api import OllamaError
 from pipeline.export import export_project
 from pipeline.orchestrator import PipelineOrchestrator
 from pipeline.project import StoryProject
+from tests.isolamento import local_only
 
 
 def _stub(fail_on: set[str] | None = None):
@@ -356,8 +357,8 @@ def test_api_gera_capitulo_em_segundo_plano_e_bloqueia_edicao(tmp_path):
             release.wait(5)
         return base(model, system_prompt, user_prompt, **kw)
 
-    with p1, p2, patch.object(srv, "check_ollama_health", lambda **kw: True), \
-            patch.object(orch_mod, "generate_text", slow):
+    with local_only(), p1, p2, patch.object(srv, "check_ollama_health", lambda **kw: True), \
+            patch.object(orch_mod, "generate_text", slow), patch.object(config, "AUTO_NEXT_PREMISE", False):
         c = _client(tmp_path)
         jobs = c.app.state.jobs
         slug = c.post("/api/projects", json={"name": "Gen"}).json()["slug"]
@@ -393,7 +394,7 @@ def test_api_sem_ollama_nao_comeca_geracao(tmp_path):
     import webapp.server as srv
     (tmp_path / "projetos").mkdir()
     p1, p2 = _with_data_dir(tmp_path)
-    with p1, p2, patch.object(srv, "check_ollama_health", lambda **kw: False):
+    with local_only(), p1, p2, patch.object(srv, "check_ollama_health", lambda **kw: False):
         c = _client(tmp_path)
         slug = c.post("/api/projects", json={"name": "Off"}).json()["slug"]
         c.post(f"/api/projects/{slug}/chapters", json={"premise": "PREMISE-1"})

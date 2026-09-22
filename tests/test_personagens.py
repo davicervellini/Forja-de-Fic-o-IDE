@@ -32,6 +32,7 @@ Closed list.
 
 - **Stargate Atlantis.** Allowed: Rodney McKay. The city.
 """
+from tests.isolamento import local_only
 
 
 def _project(tmp_path, with_meta=True) -> StoryProject:
@@ -175,7 +176,7 @@ def test_importacao_da_wiki_gera_resultados_sem_gravar(tmp_path):
         return {"name": name, "page_title": f"{name} (page)", "sheet": f"Sheet of {name}.",
                 "url": "https://stargate.fandom.com/wiki/X", "found": True, "error": ""}
 
-    with patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
+    with local_only(), patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
             patch.object(srv, "check_ollama_health", lambda **kw: True), \
             patch.object(wf, "fetch_character_sheet", fake_fetch):
         c = TestClient(srv.create_app())

@@ -115,6 +115,7 @@ _SPEC: dict[str, tuple[str, object]] = {
     "CLOUD_FALLBACK": ("bool", True),
     "CLOUD_FALLBACK_MODEL": ("str", "gemma4:12b"),
     "CLOUD_FALLBACK_MINUTES": ("int", 30),
+    "AUTO_NEXT_PREMISE": ("bool", True),
 }
 
 # Chaves que a tela ⚙ Configurações edita e grava no config.json. As outras continuam só no .env,
@@ -127,7 +128,7 @@ UI_KEYS = [
     "DRAFTING_NUM_CTX", "REFINING_NUM_CTX", "SUMMARIZING_NUM_CTX",
     "DRAFTING_NUM_GPU", "REFINING_NUM_GPU", "SUMMARIZING_NUM_GPU",
     "CHAPTER_TARGET_WORDS", "CONSISTENCY_CHECK_ENABLED", "REQUEST_TIMEOUT",
-    "CLOUD_FALLBACK", "CLOUD_FALLBACK_MODEL", "CLOUD_FALLBACK_MINUTES",
+    "CLOUD_FALLBACK", "CLOUD_FALLBACK_MODEL", "CLOUD_FALLBACK_MINUTES", "AUTO_NEXT_PREMISE",
 ]
 
 
@@ -244,6 +245,8 @@ REQUEST_TIMEOUT: int = _values["REQUEST_TIMEOUT"]
 CLOUD_FALLBACK: bool = _values["CLOUD_FALLBACK"]
 CLOUD_FALLBACK_MODEL: str = _values["CLOUD_FALLBACK_MODEL"]
 CLOUD_FALLBACK_MINUTES: int = _values["CLOUD_FALLBACK_MINUTES"]
+# Depois que um capítulo termina, escreve a premissa do seguinte para o usuário revisar e aprovar.
+AUTO_NEXT_PREMISE: bool = _values["AUTO_NEXT_PREMISE"]
 
 
 def current_settings() -> dict:

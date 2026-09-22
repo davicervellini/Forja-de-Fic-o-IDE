@@ -17,6 +17,7 @@ from pipeline.orchestrator import PipelineOrchestrator
 from pipeline.project import StoryProject
 
 BODY = "# T\n\n## 1. Story summary (EN)\n\nA hub.\n\n### 5.8 Cast (EN)\n\n- **Arthur.** Guy.\n\n### 9.5 Universes (EN)\n\n- **Stargate Atlantis.** City.\n"
+from tests.isolamento import local_only
 
 
 def _project(tmp_path) -> StoryProject:
@@ -171,7 +172,7 @@ def test_api_importa_local_com_pagina_escolhida(tmp_path):
         return {"kind": "location", "name": name, "page_title": exact_title or name, "sheet": f"Sheet {name}.",
                 "url": "u", "found": True, "error": "", "candidates": [], "sublocations": ["East Pier"], "images": []}
 
-    with patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
+    with local_only(), patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
             patch.object(srv, "check_ollama_health", lambda **kw: True), \
             patch.object(W, "fetch_location_sheet", fake_fetch):
         c = TestClient(srv.create_app())

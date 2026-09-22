@@ -252,6 +252,12 @@ function handleEvent(e) {
         refreshProject();
       }
       break;
+    case "premise_auto":
+      if (e.project === S.slug) {
+        refreshProject().then(() => { if (S.current === e.chapter && !S.editing) loadChapter(e.chapter, "premise"); });
+        if (!quiet) toast(`Premissa do capítulo ${String(e.chapter).padStart(2, "0")} pronta para revisar.${e.ok ? "" : " O modelo fugiu do formato: está no modo Texto."}`, "ok", 9000);
+      }
+      break;
     case "chapter_complete":
       if (!quiet && S.job && S.job.project === S.slug) toast(`Capítulo ${String(e.chapter).padStart(2, "0")} pronto.`);
       break;
@@ -412,6 +418,7 @@ function renderChapterList() {
       <span class="num">${String(c.num).padStart(2, "0")}</span>
       <span class="name">${esc(c.title.replace(/^(chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+\s*[:.\-–—]?\s*/i, "") || "Sem título")}</span>
       ${c.memory_stale ? '<span class="stale" title="Texto mudou depois da memória">↻</span>' : ""}
+      ${c.premise_pending ? '<span class="stale" title="Premissa sugerida pelo programa, esperando sua aprovação">✎</span>' : ""}
       <span class="muted">${c.words ? c.words : ""}</span>`;
     li.onclick = () => selectChapter(c.num);
     ol.appendChild(li);
@@ -449,6 +456,9 @@ async function loadChapter(num, tab = "final") {
   const notes = [];
   if (c.info.memory_stale) notes.push("O texto final mudou depois que a memória da história foi atualizada. Use <b>↻ Atualizar memória</b> para refazer o resumo e a memória com o texto novo.");
   if (c.info.memory_note) notes.push(esc(c.info.memory_note));
+  const pendingPremise = !!c.info.premise_pending && meta.status !== "done";
+  if (pendingPremise) notes.push("O programa escreveu esta premissa quando o capítulo anterior terminou. Revise na aba <b>Premissa</b>, ajuste o que quiser e clique em <b>✔ Aprovar e gerar</b>. Até lá, ▶ Gerar tudo pula este capítulo.");
+  $("#btn-approve-premise").classList.toggle("hidden", !pendingPremise);
   $("#ch-notice").innerHTML = notes.join("<br>");
   $("#ch-notice").classList.toggle("hidden", !notes.length);
   $("#btn-refresh-memory").classList.toggle("hidden", !(c.info.memory_stale && c.final));
@@ -1495,6 +1505,7 @@ async function openSettings() {
         <div class="inline-row"><button type="button" id="st-resume-cloud">Voltar a usar a nuvem agora</button><span class="muted" id="st-resume-msg"></span></div>
       </div>
       <label class="check"><input type="checkbox" data-key="CONSISTENCY_CHECK_ENABLED" ${v.CONSISTENCY_CHECK_ENABLED ? "checked" : ""}> Checagem de consistência depois de cada capítulo</label>
+      <label class="check"><input type="checkbox" data-key="AUTO_NEXT_PREMISE" ${v.AUTO_NEXT_PREMISE ? "checked" : ""}> Escrever a premissa do próximo capítulo quando um capítulo terminar (fica esperando sua aprovação)</label>
       <p class="muted">Pasta de dados: <code>${esc(data.data_dir)}</code><br>Log: <code>${esc(data.log_file)}</code></p>`,
     actions: [
       { label: "Cancelar", value: null },
@@ -1616,6 +1627,13 @@ function bind() {
   $("#btn-check-premise").onclick = checkPremise;
   $$("#premise-mode button").forEach(b => { b.onclick = () => switchPremiseMode(b.dataset.mode); });
   $("#btn-redo").onclick = redoChapter;
+  $("#btn-approve-premise").onclick = async () => {
+    try {
+      if (premiseDirty()) await savePremise(true);
+      await generate([S.current]);
+      $("#btn-approve-premise").classList.add("hidden");
+    } catch { /* savePremise já mostrou o erro */ }
+  };
   $("#btn-refresh-memory").onclick = refreshMemory;
   $("#btn-delete-chapter").onclick = deleteChapter;
   $("#btn-save-state").onclick = saveState;

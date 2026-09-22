@@ -19,13 +19,15 @@ from pydantic import BaseModel
 
 from pipeline import cast
 from pipeline import premise as premise_mod
+from pipeline import premise_flow
+from pipeline.premise_flow import premise_context
 from pipeline import chapters as ch
 from pipeline import config
 from pipeline.akashic import build_registro_modelo
 from pipeline.api import check_ollama_health, list_installed_models, cloud_paused, resume_cloud
 from pipeline.export import FORMATS, default_filename, export_project
 from pipeline.io_utils import read_file, write_file
-from pipeline.orchestrator import PipelineOrchestrator
+from pipeline.orchestrator import ChapterResult, PipelineOrchestrator
 from pipeline import credentials
 from pipeline.profiles import PROFILES, missing_models
 from pipeline.providers import PROVIDERS, ProviderError, is_cloud, label
@@ -299,6 +301,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
                 "has_final": bool(e.final.strip()),
                 "memory_stale": bool(info.get("memory_stale")),
                 "edited": bool(info.get("edited")),
+                "premise_pending": bool(info.get("premise_pending")) and e.status != "done",
             })
         return {
             "slug": slug,
@@ -467,13 +470,36 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
         def target(callbacks, cancel_event: threading.Event):
             orch = PipelineOrchestrator(project=project, cancel_event=cancel_event)
-            work(orch, project, callbacks)
+            result = work(orch, project, callbacks)
+            # Só geração e refação devolvem ChapterResult; atualizar a memória não puxa premissa nova.
+            results = [r for r in (result if isinstance(result, list) else [result]) if isinstance(r, ChapterResult)]
+            if kind in ("generate", "redo") and results and all(r.status == "done" for r in results) \
+                    and not cancel_event.is_set():
+                next_premise(slug, project, max(r.chapter_num for r in results), callbacks, cancel_event)
 
         try:
             job = jobs.start(kind, slug, label, target)
         except RuntimeError as e:
             raise HTTPException(409, str(e))
         return {"job": job.id}
+
+    def next_premise(slug: str, project: StoryProject, done_num: int, callbacks, cancel_event: threading.Event):
+        """Premissa do capítulo seguinte, para revisar. Falhar aqui não desfaz o capítulo pronto."""
+        from pipeline.api import GenerationInterrupted, OllamaError
+        if not config.AUTO_NEXT_PREMISE:
+            return
+        try:
+            done = premise_flow.auto_next_premise(
+                project, done_num, cancel_event, on_status=callbacks.on_status,
+                on_token=lambda tok: callbacks.on_token("premise_suggest", tok))
+        except GenerationInterrupted:
+            return
+        except OllamaError as e:
+            logger.warning(f"Premissa automática do capítulo {done_num + 1:02d} falhou: {e}")
+            callbacks.on_status(f"O capítulo {done_num:02d} está pronto, mas a premissa do seguinte falhou: {e}")
+            return
+        if done:
+            jobs.emit("premise_auto", project=slug, **done)
 
     @app.post("/api/projects/{slug}/generate")
     def generate(slug: str, body: GenerateBody):
@@ -483,6 +509,17 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             e for e in project.scan_chapters()
             if e.status != "done" and e.premise.strip() and (wanted is None or e.num in wanted)
         ]
+        if wanted is None:
+            # "Gerar tudo" pula premissas sugeridas que o usuário ainda não aprovou.
+            waiting = [e.num for e in pending if premise_flow.pending_approval(project, e.num)]
+            pending = [e for e in pending if e.num not in waiting]
+            if not pending and waiting:
+                raise HTTPException(400, f"A premissa do capítulo {waiting[0]:02d} foi sugerida pelo programa e espera "
+                                         "sua aprovação. Revise na aba Premissa e clique em ✔ Aprovar e gerar.")
+        else:
+            # Pedir um capítulo pelo número é aprovar a premissa dele.
+            for e in pending:
+                premise_flow.approve(project, e.num)
         if not pending:
             raise HTTPException(400, "Nenhum capítulo pendente com premissa.")
         nums = [e.num for e in pending]
@@ -567,42 +604,6 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
     # ── Premissa guiada ──────────────────────────────────────
 
-    def premise_context(project: StoryProject, num: int) -> dict:
-        from pipeline.scenes import split_chapter, tail_words
-        akashic_full = read_file(project.akashic_path) if project.akashic_path.exists() else ""
-        prev = project.chapter_dir(num - 1) / "capitulo_final.md"
-        tail = ""
-        if num > 1 and prev.exists():
-            _, scenes = split_chapter(read_file(prev))
-            tail = tail_words("\n\n".join(scenes), 400)
-        # Com capítulos depois deste já prontos, o contexto é o de antes dele (snapshot), se houver.
-        snap = ch.load_snapshot(project, num) if ch.later_done(project, num) else None
-        state = snap or project.snapshot_state()
-        introduced, not_introduced = cast_so_far(project, num)
-        return dict(
-            akashic=project.load_akashic_model(),
-            outline=premise_mod.outline_row(akashic_full, num),
-            next_outline=premise_mod.outline_row(akashic_full, num + 1),
-            introduced=introduced,
-            not_introduced=not_introduced,
-            places=[loc.name for loc in (cast.load(project)[1].locations if cast.load(project)[1] else [])],
-            previous_tail=tail,
-            story_so_far=state.get("story_so_far", ""),
-            summaries=[(int(n), t) for n, t in state.get("accumulated_summaries", []) if int(n) < num],
-            open_threads=state.get("open_threads", ""),
-            roster=state.get("character_roster", ""),
-        )
-
-    def cast_so_far(project: StoryProject, num: int) -> tuple[list[str], list[str]]:
-        """(personagens que já apareceram antes deste capítulo ou são protagonistas, os que ainda não)."""
-        _, meta = cast.load(project)
-        if not meta:
-            return [], []
-        seen = cast.appearances(project, [c.name for c in meta.characters])
-        introduced = [c.name for c in meta.characters
-                      if c.role == "protagonist" or any(n < num for n in seen.get(c.name, []))]
-        return introduced, [c.name for c in meta.characters if c.name not in introduced]
-
     @app.get("/api/projects/{slug}/chapters/{num}/premise-form")
     def get_premise_form(slug: str, num: int):
         project = load(slug)
@@ -639,17 +640,9 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         require_backends({config.PROVIDER_REFINING})
 
         def target(callbacks, cancel_event: threading.Event):
-            from pipeline.api import generate_text
             callbacks.on_status(label)
-            raw = generate_text(
-                model=config.MODEL_REFINING, provider=config.PROVIDER_REFINING,
-                system_prompt=system, user_prompt=user,
-                temperature=0.5 if kind == "premise_suggest" else 0.1,
-                num_ctx=config.REFINING_NUM_CTX, cancel_event=cancel_event,
-                on_token=lambda tok: callbacks.on_token(kind, tok),
-                # Premissa tem ~500 palavras; o teto baixo corta o modelo que tenta escrever o capítulo.
-                extra_options={"num_predict": 900, "stop": ["\n---"]},
-            )
+            raw = premise_flow.ask_model(system, user, kind == "premise_suggest", cancel_event,
+                                         lambda tok: callbacks.on_token(kind, tok))
             on_done(raw)
 
         try:
@@ -666,16 +659,19 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         user = premise_mod.build_suggest_prompt(num, config.CHAPTER_TARGET_WORDS, body.notes, **ctx)
 
         def done(raw: str):
-            raw = premise_mod.cut_after_premise(raw)
-            form = premise_mod.from_text(raw)
-            premise_mod.drop_template_echo(form)
-            premise_mod.prune_must_not(form, ctx["outline"])
-            removed = premise_mod.enforce_cast(form, ctx["not_introduced"], ctx["outline"])
+            form, raw, removed = premise_flow.clean_suggestion(raw, ctx)
             jobs.emit("premise_result", project=slug, chapter=num, form=form.to_dict(), raw=raw,
                       ok=bool(form.scenes), removed=removed)
 
         return premise_job(slug, num, "premise_suggest", f"Sugerindo a premissa do capítulo {num:02d}",
                            premise_mod.SYSTEM_PREMISE_WRITER, user, done)
+
+    @app.post("/api/projects/{slug}/chapters/{num}/premise/approve")
+    def approve_premise(slug: str, num: int):
+        project = load(slug)
+        chapter_exists(project, num)
+        premise_flow.approve(project, num)
+        return {"ok": True}
 
     @app.post("/api/projects/{slug}/chapters/{num}/premise/check")
     def check_premise(slug: str, num: int, body: CheckBody):
