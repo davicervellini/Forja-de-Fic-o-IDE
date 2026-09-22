@@ -24,7 +24,10 @@ from pipeline.api import check_ollama_health, list_installed_models
 from pipeline.export import FORMATS, default_filename, export_project
 from pipeline.io_utils import read_file, write_file
 from pipeline.orchestrator import PipelineOrchestrator
+from pipeline import credentials
 from pipeline.profiles import PROFILES, missing_models
+from pipeline.providers import PROVIDERS, ProviderError, is_cloud, label
+from pipeline.providers import list_models as list_cloud_models
 from pipeline.project import StoryProject
 from pipeline.scenes import parse_premise
 from webapp.jobs import JobManager
@@ -88,6 +91,17 @@ class SettingsBody(BaseModel):
     values: dict[str, Any]
 
 
+class KeyBody(BaseModel):
+    key: str = ""
+
+
+PHASES = ("DRAFTING", "REFINING", "SUMMARIZING")
+
+
+def phase_providers() -> dict[str, str]:
+    return {p.lower(): getattr(config, f"PROVIDER_{p}") for p in PHASES}
+
+
 # ── Aplicação ────────────────────────────────────────────────
 
 def create_app(manager: JobManager | None = None) -> FastAPI:
@@ -121,8 +135,12 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
     @app.get("/api/status")
     def status():
+        used = phase_providers()
+        uses_ollama = "ollama" in used.values()
         return {
-            "ollama": check_ollama_health(timeout=3),
+            "ollama": check_ollama_health(timeout=3) if uses_ollama else None,
+            "uses_ollama": uses_ollama,
+            "providers": used,
             "job": jobs.state(),
             "models": {
                 "drafting": config.MODEL_DRAFTING,
@@ -139,6 +157,8 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             "values": config.current_settings(),
             "keys": config.UI_KEYS,
             "profiles": PROFILES,
+            "providers": PROVIDERS,
+            "credentials": credentials.masked(),
             "data_dir": str(config.DATA_DIR),
             "log_file": str(log_file()),
         }
@@ -156,8 +176,26 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
     def ollama(base_url: str | None = None):
         online = check_ollama_health(timeout=3, base_url=base_url)
         models = list_installed_models(timeout=5, base_url=base_url) if online else []
-        wanted = {k: v for k, v in config.current_settings().items() if k.startswith("MODEL_")}
+        wanted = {k: v for k, v in config.current_settings().items() if k.startswith(("MODEL_", "PROVIDER_"))}
         return {"online": online, "models": models, "missing": missing_models(wanted, models) if online else []}
+
+    @app.put("/api/credentials/{provider}")
+    def put_credential(provider: str, body: KeyBody):
+        try:
+            credentials.set_key(provider, body.key)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"credentials": credentials.masked()}
+
+    @app.post("/api/providers/{provider}/models")
+    def provider_models(provider: str, body: KeyBody):
+        """Testa a chave (a digitada ou a salva) listando os modelos do provedor."""
+        if provider not in PROVIDERS or not is_cloud(provider):
+            raise HTTPException(400, f"Provedor desconhecido: {provider}")
+        try:
+            return {"models": list_cloud_models(provider, body.key or None)}
+        except ProviderError as e:
+            raise HTTPException(400, str(e))
 
     # ── Projetos ─────────────────────────────────────────────
 
@@ -343,13 +381,18 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
     # ── Geração ──────────────────────────────────────────────
 
-    def require_ollama():
-        if not check_ollama_health(timeout=3):
+    def require_backends():
+        """Antes de gerar: Ollama no ar se alguma fase usa ele, chave cadastrada para cada provedor na nuvem."""
+        used = set(phase_providers().values())
+        missing = [label(p) for p in used if is_cloud(p) and not credentials.get_key(p)]
+        if missing:
+            raise HTTPException(400, f"Falta a chave de API de {', '.join(missing)}. Cadastre em ⚙ Configurações.")
+        if "ollama" in used and not check_ollama_health(timeout=3):
             raise HTTPException(503, f"O Ollama não respondeu em {config.OLLAMA_BASE_URL}. Abra o Ollama e tente de novo.")
 
     def start_job(slug: str, kind: str, label: str, work):
         ensure_idle()
-        require_ollama()
+        require_backends()
         project = load(slug)
 
         def target(callbacks, cancel_event: threading.Event):

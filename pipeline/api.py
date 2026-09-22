@@ -1,5 +1,6 @@
 """
-api.py — Interação com a API REST do Ollama.
+api.py — Interação com a API REST do Ollama. Os provedores na nuvem ficam em
+providers.py; generate_text escolhe pelo parâmetro `provider`.
 
 Suporta streaming de tokens (para exibição em tempo real na GUI)
 e modo batch (resposta completa de uma vez).
@@ -61,9 +62,10 @@ def generate_text(
     on_token: Callable[[str], None] | None = None,
     cancel_event: threading.Event | None = None,
     extra_options: dict | None = None,
+    provider: str = "ollama",
 ) -> str:
     """
-    Envia uma requisição de geração ao Ollama com streaming.
+    Envia uma requisição de geração ao Ollama (ou a um provedor na nuvem) com streaming.
 
     Args:
         model: Nome do modelo (ex: 'llama3.1:8b').
@@ -74,7 +76,9 @@ def generate_text(
         timeout: Timeout em segundos (usa REQUEST_TIMEOUT se None).
         on_token: Callback chamado para cada token gerado (streaming).
         cancel_event: Evento de cancelamento (threading.Event).
-        extra_options: Opções extras do Ollama (ex: {'num_gpu': 28}).
+        extra_options: Opções extras do Ollama (ex: {'num_gpu': 28}). Na nuvem só
+            `num_predict` vale (vira o teto de tokens); as outras são do Ollama.
+        provider: "ollama" ou um provedor de pipeline/providers.py ("anthropic", "google"...).
 
     Returns:
         Texto completo gerado.
@@ -85,6 +89,15 @@ def generate_text(
     """
     if timeout is None:
         timeout = config.REQUEST_TIMEOUT
+
+    if provider and provider != "ollama":
+        from pipeline.providers import generate_cloud
+        return generate_cloud(
+            provider, model, system_prompt, user_prompt,
+            temperature=temperature,
+            num_predict=(extra_options or {}).get("num_predict"),
+            timeout=timeout, on_token=on_token, cancel_event=cancel_event,
+        )
 
     options = {
         "temperature": temperature,

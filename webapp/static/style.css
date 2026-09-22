@@ -224,3 +224,11 @@ dialog.wide { width: min(900px, 94vw); }
 .settings-section h4 { margin: 0 0 10px; font-size: 13px; color: var(--text); }
 .check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
 .check input { width: auto; }
+
+.phase-grid { display: grid; grid-template-columns: 1fr 1.4fr 0.2fr; gap: 0 14px; }
+.key-row {
+  display: grid; grid-template-columns: 190px 1fr auto auto auto; gap: 8px; align-items: center;
+  padding: 8px 0; border-bottom: 1px dashed var(--line);
+}
+.key-row .key-name { font-size: 13px; }
+.key-row .key-msg { grid-column: 2 / -1; font-size: 12px; }

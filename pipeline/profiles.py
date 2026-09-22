@@ -68,12 +68,52 @@ PROFILES: dict[str, dict] = {
             "SUMMARIZING_NUM_CTX": 12288,
         },
     },
+    # ── Nuvem: não precisa de placa de vídeo, mas cada capítulo custa créditos da conta ──
+    "anthropic": {
+        "label": "Nuvem: Anthropic (Claude)",
+        "kind": "cloud",
+        "note": "Precisa de chave de API da Anthropic, paga por uso. Não usa a placa de vídeo. "
+                "O texto da história é enviado para a Anthropic.",
+        "values": {
+            "PROVIDER_DRAFTING": "anthropic", "MODEL_DRAFTING": "claude-sonnet-5",
+            "PROVIDER_REFINING": "anthropic", "MODEL_REFINING": "claude-sonnet-5",
+            "PROVIDER_SUMMARIZING": "anthropic", "MODEL_SUMMARIZING": "claude-haiku-4-5-20251001",
+        },
+    },
+    "google": {
+        "label": "Nuvem: Google (Gemini)",
+        "kind": "cloud",
+        "note": "Precisa de chave de API do Google AI Studio (tem cota grátis limitada). "
+                "O texto da história é enviado para o Google.",
+        "values": {
+            "PROVIDER_DRAFTING": "google", "MODEL_DRAFTING": "gemini-2.5-pro",
+            "PROVIDER_REFINING": "google", "MODEL_REFINING": "gemini-2.5-flash",
+            "PROVIDER_SUMMARIZING": "google", "MODEL_SUMMARIZING": "gemini-2.5-flash",
+        },
+    },
+    "openai": {
+        "label": "Nuvem: OpenAI (GPT)",
+        "kind": "cloud",
+        "note": "Precisa de chave de API da OpenAI, paga por uso. O texto da história é enviado para a OpenAI.",
+        "values": {
+            "PROVIDER_DRAFTING": "openai", "MODEL_DRAFTING": "gpt-5",
+            "PROVIDER_REFINING": "openai", "MODEL_REFINING": "gpt-5-mini",
+            "PROVIDER_SUMMARIZING": "openai", "MODEL_SUMMARIZING": "gpt-5-mini",
+        },
+    },
     "custom": {
         "label": "Personalizado",
         "note": "Vale o que estiver preenchido abaixo.",
         "values": {},
     },
 }
+
+
+# Perfis locais usam o Ollama nas três fases (trocar de um perfil de nuvem de volta desfaz o provedor).
+for _p in PROFILES.values():
+    if _p.get("kind", "local") == "local" and _p["values"]:
+        for _phase in ("DRAFTING", "REFINING", "SUMMARIZING"):
+            _p["values"].setdefault(f"PROVIDER_{_phase}", "ollama")
 
 
 def profile_by_label(label: str) -> str:
@@ -88,5 +128,10 @@ def models_of(profile_key: str) -> list[str]:
 def missing_models(profile_values: dict, installed: list[str]) -> list[str]:
     """Modelos pedidos que não estão baixados. Nome sem tag casa também com a tag ':latest'."""
     names = set(installed)
-    wanted = {v for k, v in profile_values.items() if k.startswith("MODEL_") and v}
+    # Só modelos das fases que rodam no Ollama; os da nuvem não são baixados.
+    wanted = {
+        v for k, v in profile_values.items()
+        if k.startswith("MODEL_") and v
+        and profile_values.get(k.replace("MODEL_", "PROVIDER_"), "ollama") == "ollama"
+    }
     return sorted(m for m in wanted if m not in names and f"{m}:latest" not in names)

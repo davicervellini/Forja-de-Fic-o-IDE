@@ -4,3 +4,4 @@ customtkinter>=5.2.0
 fastapi>=0.110
 uvicorn>=0.29
 pywebview>=5.0
+truststore>=0.9

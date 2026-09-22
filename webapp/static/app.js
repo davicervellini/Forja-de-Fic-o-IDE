@@ -136,10 +136,14 @@ async function pollStatus() {
   try {
     const st = await api("GET", "/api/status");
     const el = $("#ollama-status");
-    el.classList.toggle("on", st.ollama);
-    el.classList.toggle("off", !st.ollama);
-    $(".txt", el).textContent = st.ollama ? `Ollama · ${st.models.drafting} / ${st.models.refining}` : "Ollama desligado";
-    el.title = st.ollama ? "Ollama respondendo" : "O Ollama não respondeu. Abra o Ollama para gerar capítulos.";
+    const ok = st.uses_ollama ? st.ollama : true;
+    el.classList.toggle("on", ok);
+    el.classList.toggle("off", !ok);
+    const where = p => (p === "ollama" ? "" : `${p}: `);
+    const models = `${where(st.providers.drafting)}${st.models.drafting} / ${where(st.providers.refining)}${st.models.refining}`;
+    $(".txt", el).textContent = !st.uses_ollama ? `Nuvem · ${models}` : st.ollama ? `Ollama · ${models}` : "Ollama desligado";
+    el.title = ok ? `Rascunho: ${st.providers.drafting} · Polimento: ${st.providers.refining} · Resumo: ${st.providers.summarizing}`
+                  : "O Ollama não respondeu. Abra o Ollama para gerar capítulos.";
     if (st.job && st.job.running && !S.job) setJob(st.job);
   } catch { /* servidor fechando */ }
 }
@@ -677,21 +681,20 @@ async function exportBook() {
 
 // ── Configurações ───────────────────────────────────────────
 
+const PHASES = [["DRAFTING", "Rascunho"], ["REFINING", "Polimento"], ["SUMMARIZING", "Resumo e memória"]];
+
 const SETTINGS_FIELDS = [
-  ["Modelos", [
-    ["MODEL_DRAFTING", "Rascunho", "model"], ["MODEL_REFINING", "Polimento", "model"], ["MODEL_SUMMARIZING", "Resumo e memória", "model"],
-  ]],
   ["Criatividade (temperatura)", [
-    ["DRAFTING_TEMPERATURE", "Rascunho", "number", 0.05], ["REFINING_TEMPERATURE", "Polimento", "number", 0.05], ["SUMMARIZING_TEMPERATURE", "Resumo", "number", 0.05],
+    ["DRAFTING_TEMPERATURE", "Rascunho", 0.05], ["REFINING_TEMPERATURE", "Polimento", 0.05], ["SUMMARIZING_TEMPERATURE", "Resumo", 0.05],
   ]],
-  ["Contexto (tokens)", [
-    ["DRAFTING_NUM_CTX", "Rascunho", "number", 1024], ["REFINING_NUM_CTX", "Polimento", "number", 1024], ["SUMMARIZING_NUM_CTX", "Resumo", "number", 1024],
+  ["Contexto do Ollama (tokens)", [
+    ["DRAFTING_NUM_CTX", "Rascunho", 1024], ["REFINING_NUM_CTX", "Polimento", 1024], ["SUMMARIZING_NUM_CTX", "Resumo", 1024],
   ]],
-  ["Camadas na GPU (vazio = automático)", [
-    ["DRAFTING_NUM_GPU", "Rascunho", "number", 1], ["REFINING_NUM_GPU", "Polimento", "number", 1], ["SUMMARIZING_NUM_GPU", "Resumo", "number", 1],
+  ["Camadas na GPU, só Ollama (vazio = automático)", [
+    ["DRAFTING_NUM_GPU", "Rascunho", 1], ["REFINING_NUM_GPU", "Polimento", 1], ["SUMMARIZING_NUM_GPU", "Resumo", 1],
   ]],
   ["Capítulo", [
-    ["CHAPTER_TARGET_WORDS", "Palavras por capítulo", "number", 100], ["REQUEST_TIMEOUT", "Tempo máximo de espera (s)", "number", 60],
+    ["CHAPTER_TARGET_WORDS", "Palavras por capítulo", 100], ["REQUEST_TIMEOUT", "Tempo máximo de espera (s)", 60],
   ]],
 ];
 
@@ -699,24 +702,57 @@ async function openSettings() {
   let data;
   try { data = await api("GET", "/api/settings"); } catch (e) { return fail(e); }
   const v = data.values;
-  const profileOpts = Object.entries(data.profiles).map(([k, p]) => `<option value="${k}" ${k === v.HARDWARE_PROFILE ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+  const P = data.providers;
+  const cloud = Object.keys(P).filter(k => P[k].cloud);
+  // Modelos conhecidos por provedor: sugestões, e depois o que cada teste de conexão devolver.
+  const models = { ollama: [] };
+  cloud.forEach(k => { models[k] = [...(P[k].suggested || [])]; });
+
+  const profileOpts = Object.entries(data.profiles).map(([k, p]) =>
+    `<option value="${k}" ${k === v.HARDWARE_PROFILE ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+  const providerOpts = sel => Object.entries(P).map(([k, p]) =>
+    `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+  const phaseRows = PHASES.map(([ph, name]) => `
+    <label>${name} · provedor<select data-key="PROVIDER_${ph}" data-phase="${ph}">${providerOpts(v["PROVIDER_" + ph])}</select></label>
+    <label>${name} · modelo<input data-key="MODEL_${ph}" list="dl-${ph}" value="${esc(v["MODEL_" + ph] ?? "")}"><datalist id="dl-${ph}"></datalist></label>
+    <span></span>`).join("");
+  const keyRows = cloud.map(k => {
+    const c = data.credentials[k] || {};
+    return `<div class="key-row" data-provider="${k}">
+      <div class="key-name">${esc(P[k].label)}<br><span class="muted" data-key-status>${c.configured ? `chave salva ${esc(c.hint)}${c.source && c.source !== "arquivo" ? ` (${esc(c.source)})` : ""}` : "sem chave"}</span></div>
+      <input type="password" autocomplete="off" placeholder="${c.configured ? "trocar a chave…" : "cole a chave de API"}" data-key-input>
+      <button type="button" data-key-save>Salvar</button>
+      <button type="button" data-key-test>Testar</button>
+      ${c.configured ? '<button type="button" class="danger-ghost" data-key-del>Apagar</button>' : ""}
+      <div class="muted key-msg" data-key-msg>Onde pegar: <code>${esc(P[k].key_url || "")}</code></div>
+    </div>`;
+  }).join("");
   const sections = SETTINGS_FIELDS.map(([title, fields]) => `<div class="settings-section"><h4>${title}</h4><div class="form-grid">` +
-    fields.map(([key, label, kind, step]) => kind === "model"
-      ? `<label>${label}<input data-key="${key}" list="dl-models" value="${esc(v[key] ?? "")}"></label>`
-      : `<label>${label}<input data-key="${key}" type="number" step="${step}" value="${v[key] ?? ""}"></label>`).join("") +
+    fields.map(([key, label, step]) => `<label>${label}<input data-key="${key}" type="number" step="${step}" value="${v[key] ?? ""}"></label>`).join("") +
     "</div></div>").join("");
+
   await openDialog({
     title: "Configurações",
     wide: true,
-    body: `<div class="form-grid">
-        <label>Servidor Ollama<input data-key="OLLAMA_BASE_URL" value="${esc(v.OLLAMA_BASE_URL)}"></label>
-        <div class="inline-row"><button type="button" id="st-test">Testar conexão</button><span class="muted" id="st-test-msg"></span></div>
-      </div>
-      <label>Perfil de hardware<select data-key="HARDWARE_PROFILE" id="st-profile">${profileOpts}</select></label>
+    body: `<label>Perfil<select data-key="HARDWARE_PROFILE" id="st-profile">${profileOpts}</select></label>
       <p class="muted" id="st-profile-note"></p>
+      <div class="settings-section"><h4>Modelos por fase</h4>
+        <p class="muted">Cada fase pode usar o Ollama (no seu computador) ou um serviço na nuvem. Na nuvem o texto da história é enviado para a empresa do modelo e cada capítulo gasta créditos da sua conta.</p>
+        <div class="phase-grid">${phaseRows}</div>
+      </div>
+      <div class="settings-section"><h4>Ollama</h4>
+        <div class="form-grid">
+          <label>Servidor<input data-key="OLLAMA_BASE_URL" value="${esc(v.OLLAMA_BASE_URL)}"></label>
+          <div class="inline-row"><button type="button" id="st-test">Testar conexão</button><span class="muted" id="st-test-msg"></span></div>
+        </div>
+      </div>
+      <div class="settings-section"><h4>Chaves de API (nuvem)</h4>
+        <p class="muted">Ficam só neste computador, em <code>credenciais.json</code> na pasta de dados. A tela nunca mostra a chave inteira.</p>
+        ${keyRows}
+        <label>Endereço do serviço compatível com OpenAI<input data-key="OPENAI_COMPAT_BASE_URL" value="${esc(v.OPENAI_COMPAT_BASE_URL)}"></label>
+      </div>
       ${sections}
       <label class="check"><input type="checkbox" data-key="CONSISTENCY_CHECK_ENABLED" ${v.CONSISTENCY_CHECK_ENABLED ? "checked" : ""}> Checagem de consistência depois de cada capítulo</label>
-      <datalist id="dl-models"></datalist>
       <p class="muted">Pasta de dados: <code>${esc(data.data_dir)}</code><br>Log: <code>${esc(data.log_file)}</code></p>`,
     actions: [
       { label: "Cancelar", value: null },
@@ -729,24 +765,71 @@ async function openSettings() {
       } },
     ],
     onOpen: () => {
+      const fillModels = ph => {
+        const prov = $(`#dlg [data-key="PROVIDER_${ph}"]`).value;
+        $(`#dl-${ph}`).innerHTML = (models[prov] || []).map(m => `<option value="${esc(m)}">`).join("");
+      };
+      const fillAll = () => PHASES.forEach(([ph]) => fillModels(ph));
+      $$("#dlg [data-phase]").forEach(sel => { sel.onchange = () => fillModels(sel.dataset.phase); });
+
       const note = () => { const p = data.profiles[$("#st-profile").value]; $("#st-profile-note").textContent = p ? p.note : ""; };
       note();
       $("#st-profile").onchange = () => {
         const p = data.profiles[$("#st-profile").value];
         Object.entries(p.values).forEach(([k, val]) => { const el = $(`#dlg [data-key="${k}"]`); if (el) el.value = val; });
         note();
+        fillAll();
       };
-      const test = async () => {
+
+      const testOllama = async () => {
         const url = $('#dlg [data-key="OLLAMA_BASE_URL"]').value;
         $("#st-test-msg").textContent = "testando…";
         try {
           const r = await api("GET", `/api/ollama?base_url=${encodeURIComponent(url)}`);
           $("#st-test-msg").textContent = r.online ? `ok, ${r.models.length} modelo(s) instalado(s)${r.missing.length ? ` · faltam: ${r.missing.join(", ")}` : ""}` : "sem resposta";
-          $("#dl-models").innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join("");
+          models.ollama = r.models;
+          fillAll();
         } catch (e) { $("#st-test-msg").textContent = e.message; }
       };
-      $("#st-test").onclick = test;
-      test();
+      $("#st-test").onclick = testOllama;
+      testOllama();
+
+      $$("#dlg .key-row").forEach(row => {
+        const prov = row.dataset.provider;
+        const input = $("[data-key-input]", row);
+        const msg = $("[data-key-msg]", row);
+        const setStatus = creds => {
+          const c = creds[prov];
+          $("[data-key-status]", row).textContent = c.configured ? `chave salva ${c.hint}` : "sem chave";
+        };
+        $("[data-key-save]", row).onclick = async () => {
+          if (!input.value.trim()) { msg.textContent = "Cole a chave primeiro."; return; }
+          try {
+            setStatus((await api("PUT", `/api/credentials/${prov}`, { key: input.value })).credentials);
+            input.value = "";
+            msg.textContent = "Chave salva.";
+          } catch (e) { msg.textContent = e.message; }
+        };
+        $("[data-key-test]", row).onclick = async () => {
+          msg.textContent = "testando…";
+          try {
+            if (prov === "openai_compat") {
+              // O teste usa o endereço salvo: salva o que está no campo antes.
+              await api("PUT", "/api/settings", { values: { OPENAI_COMPAT_BASE_URL: $('#dlg [data-key="OPENAI_COMPAT_BASE_URL"]').value } });
+            }
+            const r = await api("POST", `/api/providers/${prov}/models`, { key: input.value });
+            models[prov] = r.models;
+            fillAll();
+            msg.textContent = `ok, ${r.models.length} modelo(s) disponível(is).`;
+          } catch (e) { msg.textContent = e.message; }
+        };
+        const del = $("[data-key-del]", row);
+        if (del) del.onclick = async () => {
+          try { setStatus((await api("PUT", `/api/credentials/${prov}`, { key: "" })).credentials); del.remove(); msg.textContent = "Chave apagada."; }
+          catch (e) { msg.textContent = e.message; }
+        };
+      });
+      fillAll();
     },
   });
 }

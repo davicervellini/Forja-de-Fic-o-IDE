@@ -65,7 +65,7 @@ class SettingsDialog(ctk.CTkToplevel):
         # ── Perfil ──
         card = self._card("Perfil de hardware")
         self.profile_var = ctk.StringVar(value=PROFILES.get(cur["HARDWARE_PROFILE"], PROFILES["custom"])["label"])
-        ctk.CTkComboBox(card, values=[p["label"] for p in PROFILES.values()], variable=self.profile_var,
+        ctk.CTkComboBox(card, values=[p["label"] for p in PROFILES.values() if p.get("kind", "local") == "local"], variable=self.profile_var,
                         command=self._apply_profile, width=460, fg_color=BG_DARK, border_color=BORDER
                         ).grid(row=1, column=0, columnspan=3, padx=12, pady=(0, 4), sticky="w")
         self.profile_note = ctk.CTkLabel(card, text="", text_color=TEXT_DIM, font=_font(11), wraplength=720, justify="left")

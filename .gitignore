@@ -44,4 +44,5 @@ projetos/
 
 # Dados locais do app (modo desenvolvimento/portátil)
 config.json
+credenciais.json
 logs/

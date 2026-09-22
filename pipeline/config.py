@@ -76,6 +76,11 @@ def ensure_data_dirs():
 _SPEC: dict[str, tuple[str, object]] = {
     "OLLAMA_BASE_URL": ("str", "http://127.0.0.1:11434"),
     "HARDWARE_PROFILE": ("str", "custom"),
+    # Provedor de cada fase: "ollama" (local) ou um serviço na nuvem (pipeline/providers.py).
+    "PROVIDER_DRAFTING": ("provider", "ollama"),
+    "PROVIDER_REFINING": ("provider", "ollama"),
+    "PROVIDER_SUMMARIZING": ("provider", "ollama"),
+    "OPENAI_COMPAT_BASE_URL": ("str", "https://openrouter.ai/api/v1"),
     "MODEL_DRAFTING": ("str", "llama3.1:8b"),
     "MODEL_REFINING": ("str", "gemma3:12b"),
     "MODEL_SUMMARIZING": ("str", "llama3.1:8b"),
@@ -111,12 +116,16 @@ _SPEC: dict[str, tuple[str, object]] = {
 # porque alguns prompts usam o valor delas na hora do import.
 UI_KEYS = [
     "OLLAMA_BASE_URL", "HARDWARE_PROFILE",
+    "PROVIDER_DRAFTING", "PROVIDER_REFINING", "PROVIDER_SUMMARIZING", "OPENAI_COMPAT_BASE_URL",
     "MODEL_DRAFTING", "MODEL_REFINING", "MODEL_SUMMARIZING",
     "DRAFTING_TEMPERATURE", "REFINING_TEMPERATURE", "SUMMARIZING_TEMPERATURE",
     "DRAFTING_NUM_CTX", "REFINING_NUM_CTX", "SUMMARIZING_NUM_CTX",
     "DRAFTING_NUM_GPU", "REFINING_NUM_GPU", "SUMMARIZING_NUM_GPU",
     "CHAPTER_TARGET_WORDS", "CONSISTENCY_CHECK_ENABLED", "REQUEST_TIMEOUT",
 ]
+
+
+PROVIDER_IDS = ("ollama", "anthropic", "google", "openai", "openai_compat")
 
 
 def coerce(key: str, raw):
@@ -127,6 +136,11 @@ def coerce(key: str, raw):
     if kind == "str":
         text = str(raw).strip()
         return text or default
+    if kind == "provider":
+        text = str(raw).strip().lower() or str(default)
+        if text not in PROVIDER_IDS:
+            raise ValueError(f"provedor desconhecido: {text}")
+        return text
     if kind == "bool":
         if isinstance(raw, bool):
             return raw
@@ -177,6 +191,10 @@ _values.update(load_user_settings())
 OLLAMA_BASE_URL: str = _values["OLLAMA_BASE_URL"]
 OLLAMA_GENERATE_URL: str = f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate"
 HARDWARE_PROFILE: str = _values["HARDWARE_PROFILE"]
+PROVIDER_DRAFTING: str = _values["PROVIDER_DRAFTING"]
+PROVIDER_REFINING: str = _values["PROVIDER_REFINING"]
+PROVIDER_SUMMARIZING: str = _values["PROVIDER_SUMMARIZING"]
+OPENAI_COMPAT_BASE_URL: str = _values["OPENAI_COMPAT_BASE_URL"]
 MODEL_DRAFTING: str = _values["MODEL_DRAFTING"]
 MODEL_REFINING: str = _values["MODEL_REFINING"]
 MODEL_SUMMARIZING: str = _values["MODEL_SUMMARIZING"]

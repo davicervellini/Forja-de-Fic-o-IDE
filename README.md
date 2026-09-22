@@ -54,6 +54,13 @@ importação da wiki continuam na interface antiga até serem migrados.
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
 
+Cada fase (rascunho, polimento, resumo) pode usar o Ollama local ou um modelo na nuvem:
+Anthropic (Claude), Google (Gemini), OpenAI (GPT) ou qualquer serviço compatível com a
+API da OpenAI (OpenRouter, por exemplo). As chaves de API são cadastradas em
+⚙ Configurações e ficam em `credenciais.json` na pasta de dados do usuário, fora do git;
+variáveis de ambiente como `ANTHROPIC_API_KEY` também valem. Na nuvem o texto da
+história é enviado para o provedor e cada capítulo gasta créditos da conta.
+
 ### Interface Gráfica antiga (customtkinter)
 
 ```powershell

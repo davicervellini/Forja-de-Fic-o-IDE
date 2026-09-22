@@ -558,7 +558,8 @@ class EditorScreen(customtkinter.CTkFrame):
         if self.is_running or not self.queue_items:
             return
         self._store_premise()
-        if not check_ollama_health():
+        uses_ollama = "ollama" in (config.PROVIDER_DRAFTING, config.PROVIDER_REFINING, config.PROVIDER_SUMMARIZING)
+        if uses_ollama and not check_ollama_health():
             messagebox.showerror("Erro", "Ollama não está rodando.")
             return
         self.is_running = True

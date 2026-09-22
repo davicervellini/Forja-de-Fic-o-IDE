@@ -122,6 +122,10 @@ class PipelineOrchestrator:
         self.akashic_records = self.project.load_akashic_model()
         self.cancel_event = cancel_event or threading.Event()
 
+        # Local (Ollama) ou nuvem, por fase. Na nuvem num_ctx e num_gpu não se aplicam.
+        self.provider_drafting = config.PROVIDER_DRAFTING
+        self.provider_refining = config.PROVIDER_REFINING
+        self.provider_summarizing = config.PROVIDER_SUMMARIZING
         self.model_drafting = model_drafting or config.MODEL_DRAFTING
         self.model_refining = model_refining or config.MODEL_REFINING
         self.model_summarizing = model_summarizing or config.MODEL_SUMMARIZING
@@ -158,6 +162,7 @@ class PipelineOrchestrator:
         callbacks.on_status(f"Capítulo {chapter_num:02d} — Dividindo a premissa em cenas")
         raw = generate_text(
             model=self.model_drafting,
+            provider=self.provider_drafting,
             system_prompt=SYSTEM_SCENE_PLANNER,
             user_prompt=build_planner_prompt(premise, self.akashic_records),
             temperature=0.3,
@@ -186,6 +191,7 @@ class PipelineOrchestrator:
         options["repeat_last_n"] = config.DRAFTING_REPEAT_LAST_N
         return generate_text(
             model=self.model_drafting,
+            provider=self.provider_drafting,
             system_prompt=SYSTEM_DRAFTING,
             user_prompt=user_prompt,
             temperature=self.drafting_temperature,
@@ -317,6 +323,7 @@ class PipelineOrchestrator:
             try:
                 out = generate_text(
                     model=self.model_refining,
+                    provider=self.provider_refining,
                     system_prompt=SYSTEM_REFINING,
                     user_prompt=build_refining_prompt(scene, style_block=style_block,
                                                       scene_label=f"scene {i} of {total} of a chapter"),
@@ -361,6 +368,7 @@ class PipelineOrchestrator:
         user_prompt = build_summarizing_prompt(final_text, chapter_num)
         summary = generate_text(
             model=self.model_summarizing,
+            provider=self.provider_summarizing,
             system_prompt=SYSTEM_SUMMARIZING,
             user_prompt=user_prompt,
             temperature=self.summarizing_temperature,
@@ -396,6 +404,7 @@ class PipelineOrchestrator:
         )
         raw = generate_text(
             model=self.model_summarizing,
+            provider=self.provider_summarizing,
             system_prompt=SYSTEM_UPDATING,
             user_prompt=user_prompt,
             temperature=self.summarizing_temperature,
@@ -432,6 +441,7 @@ class PipelineOrchestrator:
         user_prompt = build_compress_memory_prompt(mem)
         compressed = generate_text(
             model=self.model_summarizing,
+            provider=self.provider_summarizing,
             system_prompt=SYSTEM_COMPRESS_MEMORY,
             user_prompt=user_prompt,
             temperature=0.2,
@@ -454,6 +464,7 @@ class PipelineOrchestrator:
         user_prompt = build_merging_prompt(self.project.story_so_far, to_merge)
         new_story = generate_text(
             model=self.model_summarizing,
+            provider=self.provider_summarizing,
             system_prompt=SYSTEM_MERGING,
             user_prompt=user_prompt,
             temperature=self.summarizing_temperature,
@@ -492,6 +503,7 @@ class PipelineOrchestrator:
         try:
             result = generate_text(
                 model=self.model_summarizing,
+                provider=self.provider_summarizing,
                 system_prompt=SYSTEM_CONSISTENCY,
                 user_prompt=user_prompt,
                 temperature=0.1,
