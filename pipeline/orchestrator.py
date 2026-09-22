@@ -39,6 +39,8 @@ from pipeline.prompts import (
     scene_guidance,
 )
 from pipeline.akashic_schema import read_meta
+from pipeline.premise import chapter_guidance
+from pipeline.premise import from_text as premise_from_text
 from pipeline.chapters import (
     VERSIONED_FILES,
     archive_version,
@@ -60,6 +62,7 @@ from pipeline.scenes import (
     remove_repeated_sentences,
     remove_repetition,
     split_chapter,
+    split_long_paragraphs,
     tail_words,
     trim_incomplete_ending,
 )
@@ -202,6 +205,14 @@ class PipelineOrchestrator:
             extra_options=options,
         )
 
+    def _character_sheets(self) -> dict[str, str]:
+        """Nome → ficha para o modelo, dos metadados do Registro Akáshico."""
+        path = self.project.akashic_path
+        if not path.exists():
+            return {}
+        meta, _ = read_meta(path.read_text(encoding="utf-8"))
+        return {c.name: c.sheet.strip() for c in meta.characters} if meta else {}
+
     def _protagonist_voice(self) -> str:
         """Ficha curta do(s) protagonista(s), lida dos metadados do Registro Akáshico."""
         path = self.project.akashic_path
@@ -220,7 +231,7 @@ class PipelineOrchestrator:
         text = remove_repetition(text)
         if previous_text.strip():
             text = drop_overlap(text, previous_text)
-        return remove_repeated_sentences(text, seen)
+        return split_long_paragraphs(remove_repeated_sentences(text, seen))
 
     def _run_drafting(self, premise: str, chapter_num: int, callbacks: PipelineCallbacks) -> str:
         plan = self._plan_scenes(premise, chapter_num, callbacks)
@@ -230,6 +241,9 @@ class PipelineOrchestrator:
         title = plan.title or f"Chapter {chapter_num}"
         prev_tail = self._previous_chapter_tail(chapter_num)
         voice = self._protagonist_voice()
+        # Premissa guiada: elenco do capítulo com as fichas, abertura e o que precisa ou não pode aparecer.
+        form = premise_from_text(premise)
+        sheets = self._character_sheets() if form.characters else {}
         common: dict[str, Any] = dict(
             premise=premise,
             akashic_records=self.akashic_records,
@@ -262,7 +276,10 @@ class PipelineOrchestrator:
                 )
                 chapter_text = "\n\n".join(written)
                 so_far = tail_words(chapter_text, config.CHAPTER_SO_FAR_TAIL_WORDS)
-                guidance = scene_guidance(next_text, last_sentence(chapter_text or prev_tail), voice)
+                guidance = "\n".join(filter(None, [
+                    scene_guidance(next_text, last_sentence(chapter_text or prev_tail), voice),
+                    chapter_guidance(form, sheets, first_scene=not chapter_text),
+                ]))
                 raw = self._generate_scene_text(
                     build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=target,
                                        chapter_so_far=so_far, guidance=guidance, **common),
@@ -277,7 +294,10 @@ class PipelineOrchestrator:
                         f"Capítulo {chapter_num:02d} — Cena {i}/{total} curta ({count_words(text)} palavras); continuando"
                     )
                     callbacks.on_token("drafting", "\n\n")
-                    guidance = scene_guidance(next_text, last_sentence(text), voice)
+                    guidance = "\n".join(filter(None, [
+                        scene_guidance(next_text, last_sentence(text), voice),
+                        chapter_guidance(form, sheets, first_scene=False),
+                    ]))
                     raw = self._generate_scene_text(
                         build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=missing,
                                            chapter_so_far=so_far, scene_so_far=text, guidance=guidance, **common),
@@ -337,7 +357,7 @@ class PipelineOrchestrator:
             except GenerationInterrupted as e:
                 partial = assemble_chapter(title, polished + scenes[i - 1:], config.SCENE_BREAK)
                 raise GenerationInterrupted(partial, str(e)) from e
-            out = drop_new_system_lines(clean_scene(out), scene)
+            out = split_long_paragraphs(drop_new_system_lines(clean_scene(out), scene))
             before, after = count_words(scene), count_words(out)
             if after < before * config.REFINE_MIN_RATIO:
                 logger.warning(

@@ -266,3 +266,23 @@ dialog.wide { width: min(900px, 94vw); }
 .wiki-row .wiki-info { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
 .wiki-row .dup { color: var(--amber); }
 .wiki-row .err { color: var(--red); font-size: 13px; }
+
+/* ── Premissa guiada ── */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
+.seg button.active { background: var(--bg-3); color: var(--text); }
+.premise-form { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.premise-form textarea.pf-short { min-height: 58px; }
+.pf-label { color: var(--muted); font-size: 12.5px; margin: 4px 0 6px; }
+.plan-box { border-left: 3px solid var(--accent); background: rgba(217, 164, 65, 0.07); padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+.chip.toggle.on { background: rgba(217, 164, 65, 0.18); border-color: var(--accent); color: var(--text); }
+.chip.add { border-style: dashed; color: var(--muted); }
+.scene-row { display: grid; grid-template-columns: 22px 1fr 110px; gap: 8px; margin-bottom: 8px; align-items: start; }
+.scene-row .scene-num { color: var(--muted); padding-top: 8px; text-align: right; }
+.scene-row textarea { min-height: 74px; }
+.scene-side { display: flex; flex-wrap: wrap; gap: 4px; }
+.scene-side input { width: 100%; }
+.scene-side button { padding: 3px 8px; }
+.check-box { border: 1px solid var(--amber); background: rgba(227, 163, 59, 0.07); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; font-size: 13.5px; }
+.check-box.ok { border-color: var(--green); background: rgba(79, 180, 119, 0.07); }
+.check-box ul { margin: 6px 0 0; padding-left: 18px; }

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import cast
+from pipeline import premise as premise_mod
 from pipeline import chapters as ch
 from pipeline import config
 from pipeline.akashic import build_registro_modelo
@@ -57,7 +58,7 @@ class TextBody(BaseModel):
 
 
 class NewChapter(BaseModel):
-    premise: str
+    premise: str = ""
 
 
 class GenerateBody(BaseModel):
@@ -94,6 +95,18 @@ class SettingsBody(BaseModel):
 
 class KeyBody(BaseModel):
     key: str = ""
+
+
+class PremiseFormBody(BaseModel):
+    form: dict[str, Any]
+
+
+class SuggestBody(BaseModel):
+    notes: str = ""
+
+
+class CheckBody(BaseModel):
+    text: str
 
 
 class WikiBody(BaseModel):
@@ -367,8 +380,6 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
     def add_chapter(slug: str, body: NewChapter):
         ensure_idle(slug)
         project = load(slug)
-        if not body.premise.strip():
-            raise HTTPException(400, "Escreva a premissa do capítulo.")
         num = project.next_chapter_num()
         ch.save_premise(project, num, body.premise)
         return {"num": num}
@@ -514,6 +525,132 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         except RuntimeError as e:
             raise HTTPException(409, str(e))
         return {"job": job.id}
+
+    # ── Premissa guiada ──────────────────────────────────────
+
+    def premise_context(project: StoryProject, num: int) -> dict:
+        from pipeline.scenes import split_chapter, tail_words
+        akashic_full = read_file(project.akashic_path) if project.akashic_path.exists() else ""
+        prev = project.chapter_dir(num - 1) / "capitulo_final.md"
+        tail = ""
+        if num > 1 and prev.exists():
+            _, scenes = split_chapter(read_file(prev))
+            tail = tail_words("\n\n".join(scenes), 400)
+        # Com capítulos depois deste já prontos, o contexto é o de antes dele (snapshot), se houver.
+        snap = ch.load_snapshot(project, num) if ch.later_done(project, num) else None
+        state = snap or project.snapshot_state()
+        introduced, not_introduced = cast_so_far(project, num)
+        return dict(
+            akashic=project.load_akashic_model(),
+            outline=premise_mod.outline_row(akashic_full, num),
+            next_outline=premise_mod.outline_row(akashic_full, num + 1),
+            introduced=introduced,
+            not_introduced=not_introduced,
+            previous_tail=tail,
+            story_so_far=state.get("story_so_far", ""),
+            summaries=[(int(n), t) for n, t in state.get("accumulated_summaries", []) if int(n) < num],
+            open_threads=state.get("open_threads", ""),
+            roster=state.get("character_roster", ""),
+        )
+
+    def cast_so_far(project: StoryProject, num: int) -> tuple[list[str], list[str]]:
+        """(personagens que já apareceram antes deste capítulo ou são protagonistas, os que ainda não)."""
+        _, meta = cast.load(project)
+        if not meta:
+            return [], []
+        seen = cast.appearances(project, [c.name for c in meta.characters])
+        introduced = [c.name for c in meta.characters
+                      if c.role == "protagonist" or any(n < num for n in seen.get(c.name, []))]
+        return introduced, [c.name for c in meta.characters if c.name not in introduced]
+
+    @app.get("/api/projects/{slug}/chapters/{num}/premise-form")
+    def get_premise_form(slug: str, num: int):
+        project = load(slug)
+        chapter_exists(project, num)
+        path = project.chapter_dir(num) / "premissa.md"
+        text = read_file(path) if path.exists() else ""
+        form = premise_mod.from_text(text)
+        akashic_full = read_file(project.akashic_path) if project.akashic_path.exists() else ""
+        outline = premise_mod.outline_row(akashic_full, num)
+        if not text.strip() and outline:
+            form.title = outline["title"]
+        _, meta = cast.load(project)
+        return {
+            "form": form.to_dict(),
+            "text": text,
+            "outline": outline,
+            "characters": [c.name for c in meta.characters] if meta else [],
+            "target_words": config.CHAPTER_TARGET_WORDS,
+        }
+
+    @app.put("/api/projects/{slug}/chapters/{num}/premise-form")
+    def put_premise_form(slug: str, num: int, body: PremiseFormBody):
+        ensure_idle(slug)
+        project = load(slug)
+        chapter_exists(project, num)
+        text = premise_mod.to_text(premise_mod.PremiseForm.from_dict(body.form), num)
+        ch.save_premise(project, num, text)
+        return {"text": text}
+
+    def premise_job(slug: str, num: int, kind: str, label: str, system: str, user: str, on_done):
+        ensure_idle()
+        # Planejar a premissa pede o modelo mais capaz: o do polimento.
+        require_backends({config.PROVIDER_REFINING})
+
+        def target(callbacks, cancel_event: threading.Event):
+            from pipeline.api import generate_text
+            callbacks.on_status(label)
+            raw = generate_text(
+                model=config.MODEL_REFINING, provider=config.PROVIDER_REFINING,
+                system_prompt=system, user_prompt=user,
+                temperature=0.5 if kind == "premise_suggest" else 0.1,
+                num_ctx=config.REFINING_NUM_CTX, cancel_event=cancel_event,
+                on_token=lambda tok: callbacks.on_token(kind, tok),
+                # Premissa tem ~500 palavras; o teto baixo corta o modelo que tenta escrever o capítulo.
+                extra_options={"num_predict": 900, "stop": ["\n---"]},
+            )
+            on_done(raw)
+
+        try:
+            job = jobs.start(kind, slug, label, target)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return {"job": job.id}
+
+    @app.post("/api/projects/{slug}/chapters/{num}/premise/suggest")
+    def suggest_premise(slug: str, num: int, body: SuggestBody):
+        project = load(slug)
+        chapter_exists(project, num)
+        ctx = premise_context(project, num)
+        user = premise_mod.build_suggest_prompt(num, config.CHAPTER_TARGET_WORDS, body.notes, **ctx)
+
+        def done(raw: str):
+            raw = premise_mod.cut_after_premise(raw)
+            form = premise_mod.from_text(raw)
+            premise_mod.drop_template_echo(form)
+            premise_mod.prune_must_not(form, ctx["outline"])
+            removed = premise_mod.enforce_cast(form, ctx["not_introduced"], ctx["outline"])
+            jobs.emit("premise_result", project=slug, chapter=num, form=form.to_dict(), raw=raw,
+                      ok=bool(form.scenes), removed=removed)
+
+        return premise_job(slug, num, "premise_suggest", f"Sugerindo a premissa do capítulo {num:02d}",
+                           premise_mod.SYSTEM_PREMISE_WRITER, user, done)
+
+    @app.post("/api/projects/{slug}/chapters/{num}/premise/check")
+    def check_premise(slug: str, num: int, body: CheckBody):
+        project = load(slug)
+        chapter_exists(project, num)
+        if not body.text.strip():
+            raise HTTPException(400, "A premissa está vazia.")
+        user = premise_mod.build_check_prompt(num, body.text, **premise_context(project, num))
+
+        def done(raw: str):
+            notes = raw.strip()
+            ok = notes.strip(" .!\n").upper() == "OK"
+            jobs.emit("premise_check", project=slug, chapter=num, notes=notes, ok=ok)
+
+        return premise_job(slug, num, "premise_check", f"Conferindo a premissa do capítulo {num:02d}",
+                           premise_mod.SYSTEM_PREMISE_CHECKER, user, done)
 
     @app.post("/api/jobs/cancel")
     def cancel():

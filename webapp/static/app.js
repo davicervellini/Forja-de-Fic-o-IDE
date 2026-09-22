@@ -173,7 +173,7 @@ function applyBusy() {
   const busyHere = projectBusy();
   const anyBusy = !!S.job;
   ["#btn-add-chapter", "#btn-redo", "#btn-delete-chapter", "#btn-edit-final", "#btn-save-final",
-   "#btn-save-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-save-akashic", "#btn-save-cast"].forEach(sel => {
+   "#btn-save-premise", "#btn-suggest-premise", "#btn-check-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-save-akashic", "#btn-save-cast"].forEach(sel => {
     const el = $(sel);
     if (el) el.disabled = busyHere;
   });
@@ -242,6 +242,10 @@ function handleEvent(e) {
     case "chapter_complete":
       if (!quiet && S.job && S.job.project === S.slug) toast(`Capítulo ${String(e.chapter).padStart(2, "0")} pronto.`);
       break;
+    case "premise_result":
+    case "premise_check":
+      onPremiseEvent(e);
+      break;
     case "wiki_result":
       if (e.project === S.slug) {
         if (!S.wiki) S.wiki = { results: [], total: e.total };
@@ -259,6 +263,7 @@ function handleEvent(e) {
       setJob(null);
       showLiveTab(false);
       if (!quiet && e.job && e.job.status === "cancelled") toast("Geração cancelada.", "warn");
+      if (was && was.kind && was.kind.startsWith("premise")) break;
       if (was && was.kind === "wiki") {
         if (was.project === S.slug && S.panel === "cast") renderCast();
         break;
@@ -289,7 +294,12 @@ async function leaveEditing() {
   if (!S.editing && !premiseDirty() && !castDirty) return true;
   const where = castDirty ? "nos personagens e universos" : "neste capítulo";
   const ok = await confirmDlg("Alterações não salvas", `<p>Há alterações não salvas ${where}. Descartar?</p>`, "Descartar", true);
-  if (ok) { setEditing(false); markCastDirty(false); }
+  if (ok) {
+    setEditing(false);
+    markCastDirty(false);
+    S.premiseFormDirty = false;
+    $("#premise-edit").dataset.saved = $("#premise-edit").value;
+  }
   return ok;
 }
 
@@ -440,6 +450,9 @@ async function loadChapter(num, tab = "final") {
   renderReader($("#summary-view"), c.summary, "Sem resumo. O resumo é escrito quando o capítulo termina.");
   $("#premise-edit").value = c.premise;
   $("#premise-edit").dataset.saved = c.premise;
+  S.premiseFormDirty = false;
+  setPremiseMode(S.premiseMode || "form");
+  loadPremiseForm(num);
   renderExtras(c);
   renderVersions(c);
   const liveOn = !!(S.job && S.job.project === S.slug && S.job.chapter === num);
@@ -525,11 +538,6 @@ function setEditing(on) {
   }
 }
 
-function premiseDirty() {
-  const el = $("#premise-edit");
-  return S.panel === "chapter" && el.value !== (el.dataset.saved ?? el.value);
-}
-
 async function saveFinal() {
   try {
     const res = await api("PUT", `/api/projects/${S.slug}/chapters/${S.current}/final`, { text: $("#final-edit").value });
@@ -538,41 +546,6 @@ async function saveFinal() {
     await refreshProject();
     loadChapter(S.current, "final");
   } catch (e) { fail(e); }
-}
-
-async function savePremise() {
-  try {
-    const text = $("#premise-edit").value;
-    await api("PUT", `/api/projects/${S.slug}/chapters/${S.current}/premise`, { text });
-    $("#premise-edit").dataset.saved = text;
-    toast("Premissa salva.");
-  } catch (e) { fail(e); }
-}
-
-async function addChapter() {
-  const r = await openDialog({
-    title: `Novo capítulo (${String(S.project.next_chapter).padStart(2, "0")})`,
-    body: `<p class="muted">Descreva o que acontece. Funciona melhor com cenas numeradas, por exemplo:<br>
-      <code>Chapter 3: Title</code> / <code>Scenes:</code> / <code>1. ...</code> / <code>2. ...</code> / <code>Hook: ...</code><br>
-      Sem cenas numeradas, o modelo divide a premissa em cenas sozinho.</p>
-      <textarea class="editor" id="nc-premise" style="min-height:300px;font:14px/1.5 var(--mono)"></textarea>
-      <label class="check" style="margin-top:10px"><input type="checkbox" id="nc-generate"> Gerar logo depois de criar</label>`,
-    wide: true,
-    actions: [
-      { label: "Cancelar", value: null },
-      { label: "Criar", cls: "primary", value: "ok", handler: async () => {
-        const premise = $("#nc-premise").value.trim();
-        if (!premise) { toast("Escreva a premissa.", "warn"); return false; }
-        const res = await api("POST", `/api/projects/${S.slug}/chapters`, { premise });
-        S.newChapter = { num: res.num, generate: $("#nc-generate").checked };
-      } },
-    ],
-    onOpen: () => $("#nc-premise").focus(),
-  });
-  if (r !== "ok") return;
-  await refreshProject();
-  await selectChapter(S.newChapter.num, "premise");
-  if (S.newChapter.generate) generate([S.newChapter.num]);
 }
 
 async function generate(nums) {
@@ -585,7 +558,7 @@ async function redoChapter() {
   const c = S.chapter;
   const meta = S.project.chapters.find(x => x.num === S.current);
   if (!c.final && meta.status !== "done") {
-    if (premiseDirty()) await savePremise();
+    if (premiseDirty()) await savePremise(true);
     return generate([S.current]);
   }
   const later = c.later_done.map(n => String(n).padStart(2, "0")).join(", ");
@@ -598,7 +571,10 @@ async function redoChapter() {
       <label>Premissa (pode ajustar antes de refazer)<textarea class="editor" id="rd-premise" style="min-height:260px;font:14px/1.5 var(--mono)"></textarea></label>`,
     wide: true,
     actions: [{ label: "Cancelar", value: null }, { label: "Refazer", cls: "primary", value: "ok", handler: () => { S.redoPremise = $("#rd-premise").value; } }],
-    onOpen: () => { $("#rd-premise").value = $("#premise-edit").value; },
+    onOpen: async () => {
+      if (premiseDirty()) await savePremise(true);
+      $("#rd-premise").value = $("#premise-edit").value;
+    },
   });
   if (r !== "ok") return;
   try {
@@ -1030,6 +1006,213 @@ async function applyWiki() {
   renderWikiReview();
 }
 
+// ── Premissa guiada ─────────────────────────────────────────
+
+function premiseDirty() {
+  if (S.panel !== "chapter") return false;
+  const el = $("#premise-edit");
+  return S.premiseFormDirty || el.value !== (el.dataset.saved ?? el.value);
+}
+
+function setPremiseMode(mode) {
+  S.premiseMode = mode;
+  $$("#premise-mode button").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+  $("#premise-form").classList.toggle("hidden", mode !== "form");
+  $("#premise-edit").classList.toggle("hidden", mode !== "text");
+}
+
+async function switchPremiseMode(mode) {
+  if (mode === S.premiseMode) return;
+  if (premiseDirty()) await savePremise(true);
+  if (mode === "form") await loadPremiseForm(S.current);
+  setPremiseMode(mode);
+}
+
+async function loadPremiseForm(num) {
+  let data;
+  try { data = await api("GET", `/api/projects/${S.slug}/chapters/${num}/premise-form`); } catch (e) { return fail(e); }
+  if (S.current !== num) return;
+  S.premise = data;
+  S.premiseFormDirty = false;
+  $("#premise-check").innerHTML = "";
+  renderPremiseForm();
+}
+
+function markPremiseDirty() {
+  S.premiseFormDirty = true;
+  $("#premise-dirty").textContent = "alterações não salvas";
+}
+
+function renderPremiseForm() {
+  const d = S.premise;
+  if (!d) return;
+  const f = d.form;
+  $("#premise-dirty").textContent = S.premiseFormDirty ? "alterações não salvas" : "";
+  const plan = d.outline
+    ? `<div class="plan-box"><b>Plano da história para este capítulo:</b> ${esc(d.outline.title)} — ${esc(d.outline.content)}${d.outline.extra ? ` <span class="muted">(${esc(d.outline.extra)})</span>` : ""}</div>`
+    : "";
+  const known = d.characters || [];
+  const extra = f.characters.filter(n => !known.some(k => k.toLowerCase() === n.toLowerCase()));
+  const chips = [...known, ...extra].map(n => {
+    const on = f.characters.some(c => c.toLowerCase() === n.toLowerCase());
+    return `<span class="chip toggle ${on ? "on" : ""}" data-char="${esc(n)}">${esc(n)}</span>`;
+  }).join("");
+  const total = f.scenes.reduce((a, s) => a + (parseInt(s.words, 10) || 0), 0);
+  const scenes = f.scenes.map((s, i) => `
+    <div class="scene-row" data-scene="${i}">
+      <span class="scene-num">${i + 1}</span>
+      <textarea data-sf="text" placeholder="Nome da cena. O que acontece, quem está lá, o que muda.">${esc(s.text)}</textarea>
+      <div class="scene-side">
+        <input data-sf="words" type="number" min="50" step="50" value="${s.words ?? ""}" placeholder="palavras">
+        <button type="button" data-sup title="Subir">↑</button>
+        <button type="button" data-sdel class="danger-ghost" title="Remover cena">✕</button>
+      </div>
+    </div>`).join("");
+  $("#premise-form").innerHTML = `
+    ${plan}
+    <div class="form-grid">
+      <label>Título<input data-pf="title" value="${esc(f.title)}"></label>
+    </div>
+    <label>Objetivo do capítulo<textarea data-pf="goal" class="pf-short" placeholder="O que este capítulo precisa conseguir, em uma frase.">${esc(f.goal)}</textarea></label>
+    <label>Abertura: onde e como começa<textarea data-pf="opening" class="pf-short" placeholder="Continua de onde o capítulo anterior parou: mesmo lugar, mesma luz, mesma situação.">${esc(f.opening)}</textarea></label>
+    <div class="pf-label">Personagens em cena <span class="muted">(clique para marcar; só as fichas deles vão reforçadas no fim de cada cena)</span></div>
+    <div class="chips">${chips || '<span class="muted">Cadastre personagens em Personagens e universos.</span>'}<span class="chip add" data-char-add>+ outro</span></div>
+    <div class="pf-label">Cenas <span class="muted">${total ? `${total} de ~${d.target_words} palavras` : `meta do capítulo: ~${d.target_words} palavras`}</span></div>
+    <div id="scene-rows">${scenes || '<p class="muted">Nenhuma cena. Sem cenas, o modelo divide a premissa sozinho.</p>'}</div>
+    <div class="tab-tools"><button type="button" id="btn-scene-add">+ Cena</button>
+      ${f.scenes.length ? '<button type="button" id="btn-scene-split">Dividir a meta igualmente</button>' : ""}</div>
+    <label>Gancho: como o capítulo termina<textarea data-pf="hook" class="pf-short">${esc(f.hook)}</textarea></label>
+    <label>Precisa aparecer<textarea data-pf="must_include" class="pf-short" placeholder="ex.: uma linha [System] com o progresso da construção.">${esc(f.must_include)}</textarea></label>
+    <label>Não pode aparecer<textarea data-pf="must_not" class="pf-short" placeholder="Personagens, lugares ou fatos que ainda não podem entrar.">${esc(f.must_not)}</textarea></label>`;
+
+  const box = $("#premise-form");
+  $$("[data-pf]", box).forEach(el => el.addEventListener("input", () => { f[el.dataset.pf] = el.value; markPremiseDirty(); }));
+  $$("[data-char]", box).forEach(ch => {
+    ch.onclick = () => {
+      const n = ch.dataset.char;
+      const i = f.characters.findIndex(c => c.toLowerCase() === n.toLowerCase());
+      if (i >= 0) f.characters.splice(i, 1); else f.characters.push(n);
+      markPremiseDirty();
+      renderPremiseForm();
+    };
+  });
+  $("[data-char-add]", box).onclick = async () => {
+    const r = await openDialog({
+      title: "Personagem em cena", body: '<label>Nome<input id="pc-name"></label><p class="muted">Sem ficha no registro, o modelo só recebe o nome.</p>',
+      actions: [{ label: "Cancelar", value: null }, { label: "Adicionar", cls: "primary", value: "ok", handler: () => { S.pcName = $("#pc-name").value.trim(); } }],
+      onOpen: () => $("#pc-name").focus(),
+    });
+    if (r === "ok" && S.pcName) { f.characters.push(S.pcName); markPremiseDirty(); renderPremiseForm(); }
+  };
+  $$(".scene-row", box).forEach(row => {
+    const i = parseInt(row.dataset.scene, 10);
+    $$("[data-sf]", row).forEach(el => el.addEventListener("input", () => {
+      f.scenes[i][el.dataset.sf] = el.dataset.sf === "words" ? (parseInt(el.value, 10) || null) : el.value;
+      markPremiseDirty();
+      if (el.dataset.sf === "words") {
+        const t = f.scenes.reduce((a, s) => a + (parseInt(s.words, 10) || 0), 0);
+        $$(".pf-label .muted", box)[1].textContent = `${t} de ~${d.target_words} palavras`;
+      }
+    }));
+    $("[data-sdel]", row).onclick = () => { f.scenes.splice(i, 1); markPremiseDirty(); renderPremiseForm(); };
+    $("[data-sup]", row).onclick = () => {
+      if (i === 0) return;
+      [f.scenes[i - 1], f.scenes[i]] = [f.scenes[i], f.scenes[i - 1]];
+      markPremiseDirty();
+      renderPremiseForm();
+    };
+  });
+  $("#btn-scene-add").onclick = () => { f.scenes.push({ text: "", words: null }); markPremiseDirty(); renderPremiseForm(); };
+  const split = $("#btn-scene-split");
+  if (split) split.onclick = () => {
+    const each = Math.round(d.target_words / f.scenes.length / 50) * 50;
+    f.scenes.forEach(s => { s.words = each; });
+    markPremiseDirty();
+    renderPremiseForm();
+  };
+  if (projectBusy()) $$("input, textarea, button", box).forEach(el => { el.disabled = true; });
+}
+
+async function savePremise(quiet = false) {
+  try {
+    let text;
+    if (S.premiseMode === "form" && S.premise) {
+      text = (await api("PUT", `/api/projects/${S.slug}/chapters/${S.current}/premise-form`, { form: S.premise.form })).text;
+      $("#premise-edit").value = text;
+    } else {
+      text = $("#premise-edit").value;
+      await api("PUT", `/api/projects/${S.slug}/chapters/${S.current}/premise`, { text });
+    }
+    $("#premise-edit").dataset.saved = text;
+    S.premiseFormDirty = false;
+    $("#premise-dirty").textContent = "";
+    if (S.chapter) S.chapter.premise = text;
+    if (!quiet) toast("Premissa salva.");
+    refreshProject();
+  } catch (e) { fail(e); throw e; }
+}
+
+async function suggestPremise() {
+  const hasContent = S.premise && (S.premise.form.scenes.length || S.premise.form.goal);
+  const r = await openDialog({
+    title: "Sugerir premissa com IA",
+    body: `<p class="muted">O modelo do polimento escreve a premissa a partir do Registro Akáshico, do plano da história, do fim do capítulo anterior e da memória. ${hasContent ? "<b>O formulário atual será substituído</b> (só vale depois de Salvar)." : ""}</p>
+      <label>Suas ideias para este capítulo (opcional)<textarea id="sg-notes" class="editor small" placeholder="ex.: quero uma cena em que ele fala sozinho com o terminal."></textarea></label>`,
+    actions: [{ label: "Cancelar", value: null }, { label: "Sugerir", cls: "primary", value: "ok", handler: () => { S.sgNotes = $("#sg-notes").value; } }],
+    onOpen: () => $("#sg-notes").focus(),
+  });
+  if (r !== "ok") return;
+  try { await api("POST", `/api/projects/${S.slug}/chapters/${S.current}/premise/suggest`, { notes: S.sgNotes || "" }); } catch (e) { fail(e); }
+}
+
+async function checkPremise() {
+  let text = $("#premise-edit").value;
+  if (S.premiseMode === "form" && S.premise) {
+    if (S.premiseFormDirty) await savePremise(true);
+    text = $("#premise-edit").value;
+  }
+  if (!text.trim()) { toast("A premissa está vazia.", "warn"); return; }
+  $("#premise-check").innerHTML = '<div class="check-box muted">Conferindo…</div>';
+  try { await api("POST", `/api/projects/${S.slug}/chapters/${S.current}/premise/check`, { text }); } catch (e) { fail(e); $("#premise-check").innerHTML = ""; }
+}
+
+function onPremiseEvent(e) {
+  if (e.project !== S.slug || e.chapter !== S.current) {
+    if (!e.replay) toast(`Resultado da premissa do capítulo ${String(e.chapter).padStart(2, "0")} pronto: abra o capítulo para ver.`, "ok", 7000);
+    return;
+  }
+  if (e.type === "premise_result") {
+    if (e.ok && S.premise) {
+      S.premise.form = e.form;
+      markPremiseDirty();
+      setPremiseMode("form");
+      renderPremiseForm();
+      if (!e.replay) {
+        const cut = (e.removed || []).length ? ` Tirei do elenco quem ainda não apareceu na história: ${e.removed.join(", ")}.` : "";
+        toast(`Sugestão pronta. Revise e clique em Salvar premissa.${cut}`, "ok", 9000);
+      }
+    } else {
+      $("#premise-edit").value = e.raw;
+      setPremiseMode("text");
+      if (!e.replay) toast("O modelo não seguiu o formato. A resposta foi para o modo Texto; revise antes de salvar.", "warn", 9000);
+    }
+  } else {
+    const lines = e.notes.split("\n").filter(l => l.trim());
+    $("#premise-check").innerHTML = e.ok
+      ? '<div class="check-box ok">Conferida: nenhum problema encontrado.</div>'
+      : `<div class="check-box"><b>Problemas encontrados:</b><ul>${lines.map(l => `<li>${esc(l.replace(/^[-*]\s*/, ""))}</li>`).join("")}</ul></div>`;
+  }
+}
+
+async function addChapter() {
+  try {
+    const res = await api("POST", `/api/projects/${S.slug}/chapters`, { premise: "" });
+    await refreshProject();
+    await selectChapter(res.num, "premise");
+    toast(`Capítulo ${String(res.num).padStart(2, "0")} criado. Preencha a premissa ou use ✨ Sugerir com IA.`, "ok", 7000);
+  } catch (e) { fail(e); }
+}
+
 // ── Configurações ───────────────────────────────────────────
 
 const PHASES = [["DRAFTING", "Rascunho"], ["REFINING", "Polimento"], ["SUMMARIZING", "Resumo e memória"]];
@@ -1202,7 +1385,10 @@ function bind() {
   $("#btn-edit-final").onclick = () => { switchTab("final"); setEditing(true); };
   $("#btn-cancel-final").onclick = () => setEditing(false);
   $("#btn-save-final").onclick = saveFinal;
-  $("#btn-save-premise").onclick = savePremise;
+  $("#btn-save-premise").onclick = () => savePremise().catch(() => {});
+  $("#btn-suggest-premise").onclick = suggestPremise;
+  $("#btn-check-premise").onclick = checkPremise;
+  $$("#premise-mode button").forEach(b => { b.onclick = () => switchPremiseMode(b.dataset.mode); });
   $("#btn-redo").onclick = redoChapter;
   $("#btn-refresh-memory").onclick = refreshMemory;
   $("#btn-delete-chapter").onclick = deleteChapter;
@@ -1216,7 +1402,7 @@ function bind() {
   document.addEventListener("keydown", ev => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       if (S.editing) { ev.preventDefault(); saveFinal(); }
-      else if (S.panel === "chapter" && S.tab === "premise") { ev.preventDefault(); savePremise(); }
+      else if (S.panel === "chapter" && S.tab === "premise") { ev.preventDefault(); savePremise().catch(() => {}); }
       else if (S.panel === "cast" && S.castDirty) { ev.preventDefault(); saveCast(); }
     }
   });

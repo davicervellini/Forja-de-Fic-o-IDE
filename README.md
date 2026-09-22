@@ -56,6 +56,14 @@ modelo da fase de resumo escreve a ficha em inglês e você revisa antes de ela 
 registro, com o universo de origem e a lista de permitidos. O assistente de criação
 continua na interface antiga até ser migrado.
 
+A aba **Premissa** tem um formulário guiado: título, objetivo, abertura (continuidade com
+o capítulo anterior), personagens em cena, cenas com meta de palavras, gancho, o que
+precisa e o que não pode aparecer. **✨ Sugerir com IA** escreve a premissa a partir do
+plano da história (tabela da seção 11 do Registro), do fim do capítulo anterior e da
+memória, e tira do elenco quem ainda não estreou; **🔎 Conferir** aponta contradições
+antes de gerar. O elenco e as restrições da premissa vão reforçados no fim do prompt de
+cada cena, e parágrafos de narração muito longos são quebrados no fim de uma frase.
+
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
 

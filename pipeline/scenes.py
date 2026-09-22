@@ -50,7 +50,8 @@ _SECTION_END = re.compile(
 )
 _HOOK = re.compile(r"^\s*(?:hook|gancho|termina com|ends? with)\s*:\s*(.+)$", re.I)
 _TITLE = re.compile(r"(?:chapter|cap[ií]tulo)\s+(\d+)\s*:\s*([^\n]+)", re.I)
-_WORDS = re.compile(r"(?:about|around|~|cerca de|aprox\.?)\s*(\d[\d.,]*)\s*(?:words|palavras)", re.I)
+# "about 600 words", "~600 words" ou "(600 words)".
+_WORDS = re.compile(r"(?:(?:about|around|~|cerca de|aprox\.?)\s*|\(\s*)(\d[\d.,]*)\s*(?:words|palavras)", re.I)
 _BREAK_LINE = re.compile(r"^\s*(?:\*\s*){3}\s*$")
 _LEADING_JUNK = re.compile(
     r"^\s*(?:#+\s.*|(?:chapter|cap[ií]tulo)\s+\d+\b.*|(?:scene|cena)\s+\d+\b.*|\*\*[^*]{1,60}\*\*|(?:\*\s*){3})\s*$",
@@ -253,6 +254,37 @@ def trim_incomplete_ending(text: str) -> str:
     while end < len(text) and text[end] in "\"'”’)]":
         end += 1
     return text[:end].rstrip()
+
+
+PARAGRAPH_MAX_WORDS = 140
+PARAGRAPH_TARGET_WORDS = 80
+
+
+def split_long_paragraphs(text: str, max_words: int = PARAGRAPH_MAX_WORDS,
+                          target: int = PARAGRAPH_TARGET_WORDS) -> str:
+    """
+    Quebra parágrafos de narração muito longos em pedaços de ~`target` palavras, sempre no
+    fim de uma frase. Web novel se lê no celular: blocos de 300 palavras cansam. Falas e
+    linhas [System] ficam como estão.
+    """
+    out = []
+    for para in paragraphs(text):
+        if count_words(para) <= max_words or para.lstrip().startswith(("\"", "“", "[")):
+            out.append(para)
+            continue
+        chunk: list[str] = []
+        for sent in _sentences(para):
+            chunk.append(sent.strip())
+            if count_words(" ".join(chunk)) >= target:
+                out.append(" ".join(chunk))
+                chunk = []
+        if chunk:
+            # Sobra curta junta com o pedaço anterior para não deixar uma frase solta.
+            if out and count_words(" ".join(chunk)) < target // 3:
+                out[-1] = f"{out[-1]} {' '.join(chunk)}"
+            else:
+                out.append(" ".join(chunk))
+    return "\n\n".join(out)
 
 
 def last_sentence(text: str) -> str:
