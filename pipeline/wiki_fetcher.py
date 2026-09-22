@@ -15,6 +15,7 @@ import requests
 
 from pipeline.api import generate_text
 from pipeline import config
+from pipeline.languages import notes_language, notes_rule
 from pipeline.io_utils import read_file, write_file
 
 logger = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ def search_fandom_page(
 
 SHEET_SYSTEM_PROMPT = (
     "You are a wiki archivist for a fanfiction writing tool. Convert the raw wikitext into a short "
-    "character sheet in English: ONE paragraph, under 100 words, covering origin, appearance, "
+    "character sheet: ONE paragraph, under 100 words, covering origin, appearance, "
     "personality, powers or skills, and how they speak. Canon facts only, no speculation. "
     "In-universe only: never mention actors, voice actors, episodes, seasons or production. "
     "Do not start with the character's name or a heading; output only the paragraph."
@@ -162,7 +163,8 @@ SHEET_SYSTEM_PROMPT = (
 
 def extract_character_sheet_with_llm(character_name: str, wikitext: str, cancel_event=None) -> str:
     """Usa o modelo da fase de resumo (local ou nuvem) para transformar o wikitexto numa ficha curta."""
-    user_prompt = f"Raw wikitext for {character_name}:\n\n{wikitext}\n\nWrite the short character sheet."
+    user_prompt = (f"Raw wikitext for {character_name}:\n\n{wikitext}\n\nWrite the short character sheet.\n\n"
+                   f"{notes_rule(notes_language())}")
     sheet = generate_text(
         model=config.MODEL_SUMMARIZING,
         provider=config.PROVIDER_SUMMARIZING,

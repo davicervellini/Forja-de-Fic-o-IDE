@@ -46,3 +46,5 @@ projetos/
 config.json
 credenciais.json
 logs/
+# Dados do navegador embutido (pywebview) em modo desenvolvimento
+webview/

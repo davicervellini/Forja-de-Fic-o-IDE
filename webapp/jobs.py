@@ -48,6 +48,13 @@ class JobManager:
         self._thread: threading.Thread | None = None
         self._token_buf: dict[str, list[str]] = {}
         self._last_flush = 0.0
+        # A troca da nuvem para o modelo local aparece na tela como aviso.
+        from pipeline import api
+        api.fallback_listeners.append(self._on_fallback)
+
+    def _on_fallback(self, message: str):
+        self._flush_tokens(force=True)
+        self.emit("fallback", message=message, chapter=self.job.chapter if self.job else None)
 
     # ── Assinantes (SSE) ─────────────────────────────────────
 

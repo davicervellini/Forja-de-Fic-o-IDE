@@ -10,6 +10,7 @@ Timeouts generosos para acomodar troca de modelo na VRAM.
 import json
 import logging
 import threading
+import time
 from typing import Callable
 
 import requests
@@ -31,6 +32,38 @@ class GenerationInterrupted(Exception):
     def __init__(self, fragment: str, message: str = "Geração cancelada pelo usuário."):
         self.fragment = fragment
         super().__init__(message)
+
+
+# ── Reserva local ────────────────────────────────────────────
+# Provedor → horário até quando ele fica de lado depois de esgotar o limite ou parar de responder.
+_cloud_paused: dict[str, float] = {}
+# Funções chamadas com uma mensagem legível sempre que a geração troca para o modelo local.
+fallback_listeners: list[Callable[[str], None]] = []
+
+
+def cloud_paused() -> dict[str, float]:
+    """Provedores de lado agora, com o horário (epoch) em que voltam a ser usados."""
+    now = time.time()
+    for p in [p for p, until in _cloud_paused.items() if until <= now]:
+        del _cloud_paused[p]
+    return dict(_cloud_paused)
+
+
+def resume_cloud(provider: str | None = None):
+    """Volta a usar a nuvem antes do prazo (todos os provedores, se `provider` for None)."""
+    if provider is None:
+        _cloud_paused.clear()
+    else:
+        _cloud_paused.pop(provider, None)
+
+
+def _notify_fallback(message: str):
+    logger.warning(message)
+    for fn in list(fallback_listeners):
+        try:
+            fn(message)
+        except Exception:
+            logger.exception("Falha ao avisar a troca para o modelo local.")
 
 
 def check_ollama_health(timeout: int = 10, base_url: str | None = None) -> bool:
@@ -91,13 +124,26 @@ def generate_text(
         timeout = config.REQUEST_TIMEOUT
 
     if provider and provider != "ollama":
-        from pipeline.providers import generate_cloud
-        return generate_cloud(
-            provider, model, system_prompt, user_prompt,
-            temperature=temperature,
-            num_predict=(extra_options or {}).get("num_predict"),
-            timeout=timeout, on_token=on_token, cancel_event=cancel_event,
-        )
+        from pipeline.providers import ProviderError, generate_cloud, label
+        fallback = config.CLOUD_FALLBACK_MODEL.strip() if config.CLOUD_FALLBACK else ""
+        if not (fallback and provider in cloud_paused()):
+            try:
+                return generate_cloud(
+                    provider, model, system_prompt, user_prompt,
+                    temperature=temperature,
+                    num_predict=(extra_options or {}).get("num_predict"),
+                    timeout=timeout, on_token=on_token, cancel_event=cancel_event,
+                )
+            except ProviderError as e:
+                if not (fallback and e.unavailable):
+                    raise
+                minutes = max(config.CLOUD_FALLBACK_MINUTES, 0)
+                _cloud_paused[provider] = time.time() + minutes * 60
+                _notify_fallback(
+                    f"{label(provider)} indisponível ({e}). Continuando no modelo local {fallback}; "
+                    f"a nuvem volta a ser tentada em {minutes} min."
+                )
+        model, provider = fallback, "ollama"
 
     options = {
         "temperature": temperature,
@@ -111,6 +157,9 @@ def generate_text(
         "system": system_prompt,
         "prompt": user_prompt,
         "stream": True,
+        # Modelos que raciocinam antes de responder (gemma4, qwen3...) gastariam o teto de tokens
+        # pensando e devolveriam o texto vazio. Os outros modelos ignoram o campo.
+        "think": False,
         "options": options,
     }
 

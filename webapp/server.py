@@ -22,7 +22,7 @@ from pipeline import premise as premise_mod
 from pipeline import chapters as ch
 from pipeline import config
 from pipeline.akashic import build_registro_modelo
-from pipeline.api import check_ollama_health, list_installed_models
+from pipeline.api import check_ollama_health, list_installed_models, cloud_paused, resume_cloud
 from pipeline.export import FORMATS, default_filename, export_project
 from pipeline.io_utils import read_file, write_file
 from pipeline.orchestrator import PipelineOrchestrator
@@ -31,6 +31,7 @@ from pipeline.profiles import PROFILES, missing_models
 from pipeline.providers import PROVIDERS, ProviderError, is_cloud, label
 from pipeline.providers import list_models as list_cloud_models
 from pipeline.project import StoryProject
+from pipeline.languages import story_language
 from pipeline.scenes import parse_premise
 from webapp.jobs import JobManager
 
@@ -51,6 +52,7 @@ EXTRA_FILES = {
 class NewProject(BaseModel):
     name: str
     akashic_text: str = ""
+    language: str = "en"
 
 
 class TextBody(BaseModel):
@@ -112,12 +114,15 @@ class CheckBody(BaseModel):
 class WikiBody(BaseModel):
     names: list[str]
     universe: str
+    kind: str = "character"            # "character" ou "location"
+    exact_title: str | None = None     # página escolhida pelo usuário na revisão (um nome só)
 
 
 class CastBody(BaseModel):
     characters: list[dict[str, Any]]
     universes: list[dict[str, Any]]
     structure: str | None = None
+    locations: list[dict[str, Any]] | None = None
 
 
 PHASES = ("DRAFTING", "REFINING", "SUMMARIZING")
@@ -173,6 +178,23 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
                 "summarizing": config.MODEL_SUMMARIZING,
             },
             "data_dir": str(config.DATA_DIR),
+            "ui_language": config.UI_LANGUAGE,
+            "cloud_paused": cloud_paused() if config.CLOUD_FALLBACK else {},
+            "fallback_model": config.CLOUD_FALLBACK_MODEL,
+        }
+
+    @app.post("/api/cloud/resume")
+    def cloud_resume():
+        resume_cloud()
+        return {"cloud_paused": cloud_paused()}
+
+    @app.get("/api/languages")
+    def languages():
+        from pipeline.languages import LANGUAGES, UI_TRANSLATED
+        return {
+            "all": {code: native for code, (_, native) in LANGUAGES.items()},
+            "ui": list(UI_TRANSLATED),
+            "ui_language": config.UI_LANGUAGE,
         }
 
     @app.get("/api/settings")
@@ -247,6 +269,8 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             project = StoryProject.create(projects_root(), name)
         except FileExistsError:
             raise HTTPException(409, "Já existe um projeto com esse nome.")
+        project.metadata["language"] = body.language or "en"
+        project._save_metadata()
         msg = ""
         if body.akashic_text.strip():
             write_file(project.akashic_path, body.akashic_text)
@@ -280,6 +304,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             "slug": slug,
             "name": project.name,
             "meta": {k: project.metadata.get(k, "") for k in ("book_title", "author", "language")},
+            "story_language": story_language(project),
             "chapters": chapters,
             "next_chapter": project.next_chapter_num(),
             "akashic": project.akashic_path.exists(),
@@ -339,7 +364,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         ensure_idle(slug)
         project = load(slug)
         try:
-            msg = cast.save(project, body.characters, body.universes, body.structure)
+            msg = cast.save(project, body.characters, body.universes, body.structure, body.locations)
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"message": msg, **cast.overview(project)}
@@ -490,7 +515,8 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         fase de resumo. Cada resultado sai como evento `wiki_result`; nada é gravado até o
         usuário confirmar na tela (PUT /cast).
         """
-        from pipeline.wiki_fetcher import fetch_character_sheet, project_universes
+        from pipeline import wiki_fetcher, wiki_locations
+        from pipeline.wiki_fetcher import project_universes
 
         project = load(slug)
         names = []
@@ -502,8 +528,13 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             raise HTTPException(400, "Digite pelo menos um nome.")
         if not any(u["name"] == body.universe for u in project_universes(project.project_dir)):
             raise HTTPException(400, f"O universo '{body.universe}' não tem wiki cadastrada. Preencha o campo Wiki na aba Universos.")
+        if body.kind not in ("character", "location"):
+            raise HTTPException(400, f"Tipo desconhecido: {body.kind}")
         ensure_idle()
         require_backends({config.PROVIDER_SUMMARIZING})
+        # Época e situação do universo na história: a ficha do local descreve o lugar naquele momento.
+        _, meta = cast.load(project)
+        era = next((u.model_sheet for u in (meta.universes if meta else []) if u.name == body.universe), "")
 
         def target(callbacks, cancel_event: threading.Event):
             total = len(names)
@@ -512,16 +543,24 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
                     break
                 callbacks.on_status(f"Wiki {i}/{total}: {name}")
                 try:
-                    result = fetch_character_sheet(name, body.universe, project.project_dir, cancel_event)
+                    if body.kind == "location":
+                        result = wiki_locations.fetch_location_sheet(
+                            name, body.universe, project.project_dir, era=era,
+                            exact_title=body.exact_title if total == 1 else None, cancel_event=cancel_event)
+                    else:
+                        result = wiki_fetcher.fetch_character_sheet(name, body.universe, project.project_dir, cancel_event)
                 except Exception as e:  # erro do modelo: vira aviso na linha, a fila segue
                     if cancel_event.is_set():
                         break
                     result = {"name": name, "page_title": "", "sheet": "", "url": "", "found": False,
                               "error": f"Falha ao escrever a ficha: {e}"}
-                jobs.emit("wiki_result", project=slug, universe=body.universe, index=i, total=total, result=result)
+                result.setdefault("kind", body.kind)
+                jobs.emit("wiki_result", project=slug, universe=body.universe, index=i, total=total,
+                          kind=body.kind, result=result)
 
         try:
-            job = jobs.start("wiki", slug, f"Importando {len(names)} personagem(ns) da wiki", target)
+            what = "local(is)" if body.kind == "location" else "personagem(ns)"
+            job = jobs.start("wiki", slug, f"Importando {len(names)} {what} da wiki", target)
         except RuntimeError as e:
             raise HTTPException(409, str(e))
         return {"job": job.id}
@@ -546,6 +585,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             next_outline=premise_mod.outline_row(akashic_full, num + 1),
             introduced=introduced,
             not_introduced=not_introduced,
+            places=[loc.name for loc in (cast.load(project)[1].locations if cast.load(project)[1] else [])],
             previous_tail=tail,
             story_so_far=state.get("story_so_far", ""),
             summaries=[(int(n), t) for n, t in state.get("accumulated_summaries", []) if int(n) < num],
@@ -580,6 +620,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             "text": text,
             "outline": outline,
             "characters": [c.name for c in meta.characters] if meta else [],
+            "locations": [loc.name for loc in meta.locations] if meta else [],
             "target_words": config.CHAPTER_TARGET_WORDS,
         }
 

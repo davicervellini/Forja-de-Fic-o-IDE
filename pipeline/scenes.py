@@ -49,12 +49,12 @@ _SECTION_END = re.compile(
     re.I,
 )
 _HOOK = re.compile(r"^\s*(?:hook|gancho|termina com|ends? with)\s*:\s*(.+)$", re.I)
-_TITLE = re.compile(r"(?:chapter|cap[ií]tulo)\s+(\d+)\s*:\s*([^\n]+)", re.I)
+_TITLE = re.compile(r"(?:chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+(\d+)\s*:\s*([^\n]+)", re.I)
 # "about 600 words", "~600 words" ou "(600 words)".
 _WORDS = re.compile(r"(?:(?:about|around|~|cerca de|aprox\.?)\s*|\(\s*)(\d[\d.,]*)\s*(?:words|palavras)", re.I)
 _BREAK_LINE = re.compile(r"^\s*(?:\*\s*){3}\s*$")
 _LEADING_JUNK = re.compile(
-    r"^\s*(?:#+\s.*|(?:chapter|cap[ií]tulo)\s+\d+\b.*|(?:scene|cena)\s+\d+\b.*|\*\*[^*]{1,60}\*\*|(?:\*\s*){3})\s*$",
+    r"^\s*(?:#+\s.*|(?:chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+\b.*|(?:scene|cena)\s+\d+\b.*|\*\*[^*]{1,60}\*\*|(?:\*\s*){3})\s*$",
     re.I,
 )
 
@@ -137,7 +137,7 @@ def split_chapter(text: str) -> tuple[str | None, list[str]]:
     """Inverso de assemble_chapter: (título, cenas). Aceita capítulo sem título ou sem separadores."""
     lines = (text or "").strip().splitlines()
     title = None
-    if lines and re.match(r"^\s*(?:chapter|cap[ií]tulo)\s+\d+\b", lines[0], re.I):
+    if lines and re.match(r"^\s*(?:chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+\b", lines[0], re.I):
         title = lines.pop(0).strip()
     scenes, buf = [], []
     for line in lines:

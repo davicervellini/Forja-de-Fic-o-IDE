@@ -27,12 +27,14 @@ Formato do texto:
 import re
 from dataclasses import asdict, dataclass, field
 
+from pipeline.languages import notes_language, notes_rule
 from pipeline.scenes import parse_premise
 
 LABELS = {
     "goal": ("goal", "objetivo"),
     "opening": ("opening", "abertura", "starts", "começa"),
     "characters": ("characters in scene", "personagens em cena", "characters"),
+    "locations": ("locations in scene", "locais em cena", "locations", "places"),
     "hook": ("hook", "gancho"),
     "must_include": ("must include", "must appear", "precisa aparecer", "precisa"),
     "must_not": ("must not appear", "must not", "forbidden", "não pode aparecer", "nao pode aparecer"),
@@ -47,6 +49,7 @@ class PremiseForm:
     goal: str = ""
     opening: str = ""
     characters: list[str] = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)
     scenes: list[dict] = field(default_factory=list)   # {"text": str, "words": int | None}
     hook: str = ""
     must_include: str = ""
@@ -70,11 +73,15 @@ class PremiseForm:
         chars = d.get("characters") or []
         if isinstance(chars, str):
             chars = [c.strip() for c in chars.split(",")]
+        locs = d.get("locations") or []
+        if isinstance(locs, str):
+            locs = [c.strip() for c in locs.split(",")]
         return cls(
             title=str(d.get("title", "")).strip(),
             goal=str(d.get("goal", "")).strip(),
             opening=str(d.get("opening", "")).strip(),
             characters=[c.strip() for c in chars if str(c).strip()],
+            locations=[c.strip() for c in locs if str(c).strip()],
             scenes=scenes,
             hook=str(d.get("hook", "")).strip(),
             must_include=str(d.get("must_include", "")).strip(),
@@ -96,6 +103,8 @@ def to_text(form: PremiseForm, chapter_num: int) -> str:
             parts.append(f"{label}: {_one_line(value)}")
     if form.characters:
         parts.append(f"Characters in scene: {', '.join(form.characters)}")
+    if form.locations:
+        parts.append(f"Locations in scene: {', '.join(form.locations)}")
     if form.scenes:
         parts += ["", "Scenes:"]
         for i, s in enumerate(form.scenes, start=1):
@@ -132,8 +141,8 @@ def from_text(text: str) -> PremiseForm:
         if not found:
             continue
         key, value = found
-        if key == "characters":
-            form.characters = [c.strip() for c in re.split(r"[,;]", value) if c.strip()]
+        if key in ("characters", "locations"):
+            setattr(form, key, [c.strip() for c in re.split(r"[,;]", value) if c.strip()])
         elif not getattr(form, key):
             setattr(form, key, value)
     for s in plan.scenes:
@@ -164,13 +173,16 @@ def outline_row(akashic_text: str, chapter_num: int) -> dict | None:
 
 SYSTEM_PREMISE_WRITER = """\
 You plan chapters of a serialized web novel for a small language model that will write them.
-Write the premise of the requested chapter in EXACTLY this format, in English, and nothing else:
+Write the premise of the requested chapter in EXACTLY this format and nothing else. Keep the field labels \
+(Chapter Premise, Goal, Opening, Characters in scene, Locations in scene, Scenes, Hook, Must include, Must not appear) \
+exactly in English; write their contents in the language the LANGUAGE line asks for:
 
 Chapter Premise: Chapter N: Title
 
 Goal: what the chapter must achieve, in one sentence.
 Opening: where and how the chapter starts. It must continue exactly from the PREVIOUS CHAPTER ENDING: same place, same light, same situation.
 Characters in scene: comma-separated names, only characters that the records allow at this point of the story.
+Locations in scene: comma-separated names of the places where the chapter happens.
 
 Scenes:
 1. Scene name. What happens, concretely, in two to four sentences. (about N words)
@@ -190,7 +202,7 @@ You are a continuity editor. Compare a chapter premise with the story records, t
 the end of the previous chapter. List only real problems, one per line, starting with "- ": \
 contradictions with the previous chapter ending (place, light, time, who is present), characters or \
 things that must not appear yet, facts that contradict the records, missing scene word counts, \
-a hook that does not follow from the scenes. Be concrete and short. Write in Brazilian Portuguese. \
+a hook that does not follow from the scenes. Be concrete and short. Write in the language the LANGUAGE line asks for. \
 If there are no problems, answer exactly: OK.\
 """
 
@@ -198,7 +210,7 @@ If there are no problems, answer exactly: OK.\
 def _context(akashic: str, outline: dict | None, previous_tail: str, story_so_far: str,
              summaries: list[tuple[int, str]], open_threads: str, roster: str,
              next_outline: dict | None = None, introduced: list[str] | None = None,
-             not_introduced: list[str] | None = None) -> list[str]:
+             not_introduced: list[str] | None = None, places: list[str] | None = None) -> list[str]:
     parts = [f"=== AKASHIC RECORDS ===\n{akashic.strip()}"]
     if story_so_far.strip():
         parts.append(f"=== THE STORY SO FAR ===\n{story_so_far.strip()}")
@@ -215,6 +227,8 @@ def _context(akashic: str, outline: dict | None, previous_tail: str, story_so_fa
         if not_introduced:
             cast.append(f"Characters NOT introduced yet (they must not appear, not even as a voice, "
                         f"unless the story plan for this chapter introduces them): {', '.join(not_introduced)}.")
+        if places:
+            cast.append(f"Canon places with a sheet (use these names in 'Locations in scene'): {', '.join(places)}.")
         parts.append("=== CAST SO FAR ===\n" + "\n".join(cast))
     if outline:
         plan = [f"This chapter must be about exactly this. Title: {outline['title']}. Content: {outline['content']}"
@@ -234,6 +248,7 @@ def build_suggest_prompt(chapter_num: int, target_words: int, notes: str = "", *
         task.append(f"The author's ideas for this chapter (follow them): {notes.strip()}")
     task.append("The Opening continues the PREVIOUS CHAPTER ENDING exactly: same place, same light, same situation.")
     task.append("Stop right after the 'Must not appear' line. Do not write the chapter itself.")
+    task.append(notes_rule(notes_language()))
     parts.append("\n".join(task))
     return "\n\n".join(parts)
 
@@ -245,7 +260,7 @@ def build_check_prompt(chapter_num: int, premise_text: str, **ctx) -> str:
         "=== TASK ===\nList the problems of this premise, or answer OK. Check first whether the Opening "
         "and the first scene continue the PREVIOUS CHAPTER ENDING (place, light, time, who is present), then "
         "whether any character NOT introduced yet appears, then whether the premise follows the STORY PLAN "
-        "and does not jump into the next chapter.\nEscreva a lista em português do Brasil."
+        "and does not jump into the next chapter.\n" + notes_rule(notes_language())
     )
     return "\n\n".join(parts)
 
@@ -276,6 +291,12 @@ def drop_template_echo(form: PremiseForm) -> list[str]:
         value = getattr(form, key).strip().lower()
         if value and any(value.startswith(e) for e in _TEMPLATE_ECHOES):
             setattr(form, key, "")
+            cleared.append(key)
+    for key in ("characters", "locations"):
+        items = getattr(form, key)
+        kept = [i for i in items if not any(i.lower().startswith(e) for e in _TEMPLATE_ECHOES)]
+        if len(kept) != len(items):
+            setattr(form, key, kept)
             cleared.append(key)
     return cleared
 
@@ -337,7 +358,8 @@ def enforce_cast(form: PremiseForm, not_introduced: list[str], outline: dict | N
 
 # ── Uso no pipeline ─────────────────────────────────────────
 
-def chapter_guidance(form: PremiseForm, sheets: dict[str, str], first_scene: bool) -> str:
+def chapter_guidance(form: PremiseForm, sheets: dict[str, str], first_scene: bool,
+                     places: dict[str, str] | None = None, always: list[str] | None = None) -> str:
     """
     Linhas extras para o fim do prompt de cada cena, tiradas da premissa guiada: quem está em
     cena (com a ficha de cada um), a abertura (só na primeira cena) e o que precisa e o que não
@@ -350,6 +372,16 @@ def chapter_guidance(form: PremiseForm, sheets: dict[str, str], first_scene: boo
             sheet = next((s for n, s in sheets.items() if n.lower() == name.lower()), "")
             cast.append(f"{name}: {sheet}" if sheet else name)
         lines.append("Characters in this chapter (no other named character appears): " + " | ".join(cast))
+    places = places or {}
+    wanted = list(dict.fromkeys((always or []) + form.locations))
+    described = []
+    for name in wanted:
+        sheet = next((s for n, s in places.items() if n.lower() == name.lower()), "")
+        if sheet:
+            described.append(f"{name}: {sheet}")
+    if described:
+        lines.append("Canon places in this chapter. Follow their layout exactly and never add what they say is "
+                     "not there: " + " | ".join(described))
     if first_scene and form.opening:
         lines.append(f"The chapter opens like this: {form.opening}")
     if form.must_include:

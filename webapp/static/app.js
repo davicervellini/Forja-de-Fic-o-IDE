@@ -78,7 +78,7 @@ function renderReader(el, text, placeholder = "Nada aqui ainda.") {
     const lines = para.split("\n").map(l => l.trim()).filter(Boolean);
     if (!lines.length) return;
     const first = lines[0].replace(/^#+\s*/, "");
-    if (i === 0 && lines.length === 1 && /^(chapter|cap[ií]tulo)\s+\d+/i.test(first)) {
+    if (i === 0 && lines.length === 1 && /^(chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+/i.test(first)) {
       out.push(`<h1>${inline(first)}</h1>`);
     } else if (lines.length === 1 && /^(\*\s*){3}$/.test(lines[0])) {
       out.push('<p class="break">* * *</p>');
@@ -146,9 +146,16 @@ async function pollStatus() {
     const where = p => (p === "ollama" ? "" : `${p}: `);
     const models = `${where(st.providers.drafting)}${st.models.drafting} / ${where(st.providers.refining)}${st.models.refining}`;
     S.statusProviders = st.providers;
-    $(".txt", el).textContent = !st.uses_ollama ? `Nuvem · ${models}` : st.ollama ? `Ollama · ${models}` : "Ollama desligado";
+    const paused = Object.keys(st.cloud_paused || {});
+    S.cloudPaused = st.cloud_paused || {};
+    $(".txt", el).textContent = (!st.uses_ollama ? `Nuvem · ${models}` : st.ollama ? `Ollama · ${models}` : "Ollama desligado")
+      + (paused.length ? ` · reserva local ativa (${st.fallback_model})` : "");
     el.title = ok ? `Rascunho: ${st.providers.drafting} · Polimento: ${st.providers.refining} · Resumo: ${st.providers.summarizing}`
                   : "O Ollama não respondeu. Abra o Ollama para gerar capítulos.";
+    if (paused.length) {
+      const back = paused.map(p => `${p} até ${new Date(st.cloud_paused[p] * 1000).toLocaleTimeString().slice(0, 5)}`).join(", ");
+      el.title += `\nNuvem de lado (${back}). A geração usa ${st.fallback_model}. Em ⚙ Configurações dá para voltar antes.`;
+    }
     if (st.job && st.job.running && !S.job) setJob(st.job);
   } catch { /* servidor fechando */ }
 }
@@ -197,8 +204,9 @@ function handleEvent(e) {
   switch (e.type) {
     case "job_start":
       setJob(e.job);
-      if (e.job.kind === "wiki" && e.job.project === S.slug) {
-        S.wiki = { results: [], total: (S.wiki && S.wiki.total) || 0 };
+      // Reimportar uma linha ou importar sublocais continua a mesma revisão: não zera os resultados.
+      if (e.job.kind === "wiki" && e.job.project === S.slug && !S.wiki) {
+        S.wiki = { results: [], kind: "character" };
         renderWikiReview();
       }
       S.liveChapter = null;
@@ -208,6 +216,11 @@ function handleEvent(e) {
         S.job.message = e.message;
         $("#job-status").textContent = e.message;
       }
+      break;
+    case "fallback":
+      if (!quiet) toast(e.message, "warn", 12000);
+      if (S.job) $("#job-status").textContent = e.message;
+      pollStatus();
       break;
     case "chapter_start":
       S.liveChapter = e.chapter;
@@ -247,12 +260,7 @@ function handleEvent(e) {
       onPremiseEvent(e);
       break;
     case "wiki_result":
-      if (e.project === S.slug) {
-        if (!S.wiki) S.wiki = { results: [], total: e.total };
-        S.wiki.total = e.total;
-        S.wiki.results.push({ ...e.result, universe: e.universe, include: e.result.found });
-        renderWikiReview();
-      }
+      onWikiResult(e);
       break;
     case "error":
       // Cancelamento pedido pelo usuário já ganha aviso próprio no fim do trabalho.
@@ -345,6 +353,8 @@ async function newProject() {
   const r = await openDialog({
     title: "Novo projeto",
     body: `<label>Nome da história<input id="np-name" autofocus></label>
+      <label>Idioma da história<select id="np-lang">${langOptions("en")}</select></label>
+      <p class="muted">Os capítulos são escritos neste idioma. A interface, os resumos, a memória e as fichas ficam no seu idioma.</p>
       <label>Registro Akáshico (opcional)<input type="file" id="np-file" accept=".md,.txt"></label>
       <p class="muted">O Registro Akáshico é a bíblia da história: mundo, personagens, regras e estilo. Dá para importar agora ou depois, e o assistente de criação guiado ainda está na versão antiga do programa.</p>`,
     actions: [
@@ -354,7 +364,7 @@ async function newProject() {
         if (!name) { toast("Dê um nome ao projeto.", "warn"); return false; }
         const f = $("#np-file").files[0];
         if (f) akashic = await f.text();
-        const res = await api("POST", "/api/projects", { name, akashic_text: akashic });
+        const res = await api("POST", "/api/projects", { name, akashic_text: akashic, language: $("#np-lang").value });
         if (res.message) toast(res.message);
         S.pendingOpen = res.slug;
       } },
@@ -400,7 +410,7 @@ function renderChapterList() {
     li.className = c.num === S.current && S.panel === "chapter" ? "active" : "";
     li.innerHTML = `<span class="status-dot ${running ? "st-running" : "st-" + c.status}" title="${esc(STATUS_TEXT[c.status] || c.status)}"></span>
       <span class="num">${String(c.num).padStart(2, "0")}</span>
-      <span class="name">${esc(c.title.replace(/^(chapter|cap[ií]tulo)\s+\d+\s*[:.\-–—]?\s*/i, "") || "Sem título")}</span>
+      <span class="name">${esc(c.title.replace(/^(chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+\s*[:.\-–—]?\s*/i, "") || "Sem título")}</span>
       ${c.memory_stale ? '<span class="stale" title="Texto mudou depois da memória">↻</span>' : ""}
       <span class="muted">${c.words ? c.words : ""}</span>`;
     li.onclick = () => selectChapter(c.num);
@@ -635,10 +645,23 @@ async function openPanel(name) {
     const m = S.project.meta;
     $("#meta-title").value = m.book_title || "";
     $("#meta-author").value = m.author || "";
-    $("#meta-lang").value = m.language || "en";
+    $("#meta-lang").innerHTML = langOptions(m.language || S.project.story_language || "en");
     $("#export-msg").textContent = "";
   }
   applyBusy();
+}
+
+function langOptions(selected) {
+  const all = (S.languages && S.languages.all) || { "pt-BR": "Português (Brasil)", en: "English" };
+  return Object.entries(all).map(([code, name]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${esc(name)}</option>`).join("");
+}
+
+async function saveBookMeta(quiet = false) {
+  await api("PUT", `/api/projects/${S.slug}/meta`, {
+    book_title: $("#meta-title").value, author: $("#meta-author").value, language: $("#meta-lang").value,
+  });
+  await refreshProject();
+  if (!quiet) toast("Dados do livro salvos.");
 }
 
 async function saveState() {
@@ -695,7 +718,9 @@ async function loadCast() {
 }
 
 function castItems() {
-  return S.castTab === "universes" ? S.cast.universes : S.cast.characters;
+  if (S.castTab === "universes") return S.cast.universes;
+  if (S.castTab === "locations") return S.cast.locations;
+  return S.cast.characters;
 }
 
 function renderCast() {
@@ -715,11 +740,18 @@ function renderCast() {
   $("#btn-save-cast").disabled = !editable || projectBusy();
   $("#btn-cast-add").disabled = !editable;
   $$("#cast-tabs button").forEach(b => b.classList.toggle("active", b.dataset.ctab === S.castTab));
+  const canImport = S.castTab !== "universes";
+  $("#btn-wiki-import").classList.toggle("hidden", !canImport);
+  $("#btn-wiki-import").disabled = !editable || !!S.job;
   renderCastList();
   renderCastForm();
   renderRosterMissing();
   renderWikiReview();
-  $("#btn-wiki-import").disabled = !editable || !!S.job;
+}
+
+function universeName(id) {
+  const u = S.cast.universes.find(x => x.id === id);
+  return u ? u.name : "";
 }
 
 function renderCastList() {
@@ -733,11 +765,15 @@ function renderCastList() {
     let meta;
     if (S.castTab === "universes") {
       meta = `${esc(S.cast.universe_roles[it.role] || it.role).split(" (")[0]} · ${it.active ? "na história" : "reserva"}${it.active && !it.model_sheet.trim() ? ' · <span class="warn">sem ficha</span>' : ""}`;
+    } else if (S.castTab === "locations") {
+      const where = [universeName(it.universe), it.parent ? `dentro de ${esc(it.parent)}` : ""].filter(Boolean).join(" · ");
+      meta = `${where || "sem universo"}${it.always ? " · sempre" : ""}${it.model_sheet.trim() ? "" : ' · <span class="warn">sem ficha</span>'}`;
     } else {
       const seen = (S.cast.appearances[it.name] || []).length;
       meta = `${esc(S.cast.character_roles[it.role] || it.role)}${it.sheet.trim() ? "" : ' · <span class="warn">sem ficha</span>'}${seen ? ` · ${seen} cap.` : ""}`;
     }
-    li.innerHTML = `<span class="cast-name">${esc(it.name || "(sem nome)")}</span><span class="cast-meta">${meta}</span>`;
+    const indent = S.castTab === "locations" && it.parent ? '<span class="muted">↳ </span>' : "";
+    li.innerHTML = `<span class="cast-name">${indent}${esc(it.name || "(sem nome)")}</span><span class="cast-meta">${meta}</span>`;
     li.onclick = () => { S.castSel = i; renderCastList(); renderCastForm(); };
     ul.appendChild(li);
   });
@@ -754,14 +790,30 @@ function select(label, key, value, options) {
   return `<label>${label}<select data-f="${key}">${opts}</select></label>`;
 }
 
+function imageStrip(urls) {
+  if (!urls || !urls.length) return "";
+  return `<div class="img-strip">${urls.map(u => `<img src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer" data-img="${esc(u)}" alt="" onerror="this.remove()">`).join("")}</div>`;
+}
+
+function bindImages(root) {
+  $$("[data-img]", root).forEach(img => {
+    img.onclick = () => openDialog({
+      title: "Imagem da wiki", wide: true,
+      body: `<img src="${esc(img.dataset.img)}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:6px" alt="">`,
+      actions: [{ label: "Fechar", value: null }],
+    });
+  });
+}
+
 function renderCastForm() {
   const box = $("#cast-form");
   const items = castItems();
   const it = items[S.castSel];
   if (!it) { box.innerHTML = '<p class="muted">Escolha um item à esquerda ou adicione um novo.</p>'; return; }
   const ro = S.cast.format !== "v2" ? "disabled" : "";
+  const unis = { "": "—", ...Object.fromEntries(S.cast.universes.map(u => [u.id, u.name])) };
+  let sheetKey = "sheet";
   if (S.castTab === "characters") {
-    const unis = { "": "—", ...Object.fromEntries(S.cast.universes.map(u => [u.id, u.name])) };
     const seen = S.cast.appearances[it.name] || [];
     box.innerHTML = `
       <div class="form-grid">
@@ -782,7 +834,30 @@ function renderCastForm() {
         <button type="button" data-wiki-one title="Busca este personagem na wiki do universo de origem e escreve a ficha">⇩ Buscar na Wiki</button>
         <span class="spacer"></span><button type="button" class="danger-ghost" data-remove>Remover personagem</button>
       </div>`;
+  } else if (S.castTab === "locations") {
+    sheetKey = "model_sheet";
+    const parents = { "": "— (local principal)", ...Object.fromEntries(S.cast.locations.filter(l => l !== it).map(l => [l.name, l.name])) };
+    const children = S.cast.locations.filter(l => l.parent === it.name).map(l => l.name);
+    box.innerHTML = `
+      <div class="form-grid">
+        ${field("Nome", "name", it.name)}
+        ${select("Universo", "universe", it.universe, unis)}
+        ${select("Fica dentro de", "parent", it.parent, parents)}
+      </div>
+      <label class="check"><input type="checkbox" data-f="always" ${it.always ? "checked" : ""}> Sempre no contexto (a ficha vai em toda cena, não só quando o local está na premissa)</label>
+      ${field(`Ficha para o modelo, em inglês <span class="muted" data-count></span>`, "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="Layout: where the main areas are, levels, entrances. What is there. State at the story\'s time. Never: what is not there."')}
+      <p class="muted">Vai para o prompt de cada cena quando o local está em "Locais em cena" na premissa (ou sempre, se marcado). Termine com uma frase "Never: …" com o que não existe ali, para o modelo não inventar.</p>
+      ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
+      ${it.url ? `<div class="muted">Wiki: <code>${esc(it.url)}</code></div>` : ""}
+      ${children.length ? `<div class="muted" style="margin-top:6px">Locais dentro dele: ${children.map(esc).join(", ")}</div>` : ""}
+      ${imageStrip(it.images)}
+      <div class="row-actions">
+        <button type="button" data-move="-1">↑</button><button type="button" data-move="1">↓</button>
+        <button type="button" data-wiki-one title="Busca este local na wiki do universo e escreve a ficha">⇩ Buscar na Wiki</button>
+        <span class="spacer"></span><button type="button" class="danger-ghost" data-remove>Remover local</button>
+      </div>`;
   } else {
+    sheetKey = "model_sheet";
     box.innerHTML = `
       <div class="form-grid">
         ${field("Nome", "name", it.name)}
@@ -799,14 +874,19 @@ function renderCastForm() {
       </div>`;
   }
   if (ro) $$("input, select, textarea, button", box).forEach(el => { el.disabled = true; });
-  const count = () => { const c = $("[data-count]", box); if (c) c.textContent = `(${words(it.sheet)} palavras)`; };
+  const count = () => { const c = $("[data-count]", box); if (c) c.textContent = `(${words(it[sheetKey])} palavras)`; };
   count();
+  bindImages(box);
   $$("[data-f]", box).forEach(el => {
     el.addEventListener("input", () => {
       const k = el.dataset.f;
-      if (k === "active") it.active = el.checked;
+      if (k === "active" || k === "always") it[k] = el.checked;
       else if (k === "allowed_characters") it.allowed_characters = el.value.split(",").map(s => s.trim()).filter(Boolean);
-      else it[k] = el.value;
+      else if (k === "name" && S.castTab === "locations") {
+        // Renomear um local leva junto quem está dentro dele.
+        S.cast.locations.forEach(l => { if (l.parent === it.name) l.parent = el.value; });
+        it.name = el.value;
+      } else it[k] = el.value;
       markCastDirty();
       count();
       renderCastList();
@@ -817,7 +897,8 @@ function renderCastForm() {
     one.disabled = !!S.job || !!ro;
     one.onclick = () => {
       const u = S.cast.universes.find(x => x.id === it.universe);
-      openWikiDialog([it.name], u && u.wiki ? u.name : null);
+      const kind = S.castTab === "locations" ? "location" : "character";
+      openWikiDialog([it.name], u && u.wiki ? u.name : null, kind, S.castTab === "locations" ? it.parent : "");
     };
   }
   $$("[data-ch]", box).forEach(chip => { chip.onclick = () => selectChapter(parseInt(chip.dataset.ch, 10)); });
@@ -833,6 +914,7 @@ function renderCastForm() {
   });
   $("[data-remove]", box).onclick = async () => {
     if (!(await confirmDlg("Remover", `<p>Remover <b>${esc(it.name)}</b> do registro? A remoção só vale depois de Salvar.</p>`, "Remover", true))) return;
+    if (S.castTab === "locations") S.cast.locations.forEach(l => { if (l.parent === it.name) l.parent = it.parent || ""; });
     items.splice(S.castSel, 1);
     S.castSel = Math.max(0, S.castSel - 1);
     markCastDirty();
@@ -863,11 +945,13 @@ function renderRosterMissing() {
 function addCastItem() {
   if (S.castTab === "universes") {
     S.cast.universes.push({ id: "", name: "Novo universo", role: "source", wiki: "", active: true, notes: "", allowed_characters: [], model_sheet: "" });
-    S.castSel = S.cast.universes.length - 1;
+  } else if (S.castTab === "locations") {
+    const base = S.cast.universes.find(u => u.active && u.role === "base") || S.cast.universes[0];
+    S.cast.locations.push({ name: "Novo local", universe: base ? base.id : "", parent: "", always: false, model_sheet: "", notes: "", wiki_page: "", url: "", images: [] });
   } else {
     S.cast.characters.push({ name: "Novo personagem", role: "supporting", origin: "", age: "", universe: "", notes: "", sheet: "", sheet_label: "" });
-    S.castSel = S.cast.characters.length - 1;
   }
+  S.castSel = castItems().length - 1;
   markCastDirty();
   renderCast();
   const name = $('#cast-form [data-f="name"]');
@@ -877,7 +961,7 @@ function addCastItem() {
 async function saveCast() {
   try {
     const res = await api("PUT", `/api/projects/${S.slug}/cast`, {
-      characters: S.cast.characters, universes: S.cast.universes, structure: S.cast.structure,
+      characters: S.cast.characters, universes: S.cast.universes, structure: S.cast.structure, locations: S.cast.locations,
     });
     const sel = S.castSel;
     S.cast = res;
@@ -909,12 +993,24 @@ function wikiUniverses() {
     .sort((a, b) => Number(b.active) - Number(a.active));
 }
 
-function findCharacter(name) {
+function findByName(list, name) {
   const n = name.trim().toLowerCase();
-  return S.cast.characters.find(c => c.name.trim().toLowerCase() === n);
+  return list.find(c => c.name.trim().toLowerCase() === n);
 }
 
-async function openWikiDialog(names = [], universe = null) {
+async function startWikiImport(req, { replaceIndex = null, parent = "" } = {}) {
+  if (!S.wiki) S.wiki = { results: [], kind: req.kind };
+  S.wiki.kind = req.kind;
+  S.wiki.replaceIndex = replaceIndex;
+  S.wiki.parent = parent;
+  S.wiki.pending = req.names.length;
+  renderWikiReview();
+  try { await api("POST", `/api/projects/${S.slug}/wiki/import`, req); }
+  catch (e) { fail(e); S.wiki.pending = 0; S.wiki.replaceIndex = null; renderWikiReview(); }
+}
+
+async function openWikiDialog(names = [], universe = null, kind = null, parent = "") {
+  kind = kind || (S.castTab === "locations" ? "location" : "character");
   if (S.castDirty) {
     if (!(await confirmDlg("Alterações não salvas", "<p>Salve ou descarte as alterações antes de importar. Descartar agora?</p>", "Descartar", true))) return;
     await loadCast();
@@ -924,22 +1020,40 @@ async function openWikiDialog(names = [], universe = null) {
     toast("Nenhum universo tem wiki cadastrada. Preencha o campo Wiki (ex.: stargate) na aba Universos e salve.", "warn", 9000);
     return;
   }
+  const what = kind === "location" ? "locais" : "personagens";
   const opts = unis.map(u => `<option value="${esc(u.name)}" ${u.name === universe ? "selected" : ""}>${esc(u.name)}${u.active ? "" : " (reserva)"} · ${esc(u.wiki)}.fandom.com</option>`).join("");
+  const hint = kind === "location"
+    ? "Para cada local, o programa busca a página na wiki (primeiro pelo nome exato), o modelo da fase de resumo escreve a ficha com a planta, o que existe ali e o que nunca existe, e a página sugere os sublocais para importar depois. Ex.: Atlantis, Chair room, Gate Room."
+    : "Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo escreve a ficha em inglês.";
   const r = await openDialog({
-    title: "Importar personagens da Wiki",
+    title: `Importar ${what} da Wiki`,
     body: `<label>Universo<select id="wk-universe">${opts}</select></label>
       <label>Nomes (um por linha)<textarea id="wk-names" class="editor small" style="min-height:140px">${esc(names.join("\n"))}</textarea></label>
-      <p class="muted">Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo (${esc((S.statusProviders && S.statusProviders.summarizing) || "configurado")}) escreve a ficha em inglês. Você revisa antes de entrar no registro.</p>`,
+      <p class="muted">${hint} Modelo: ${esc((S.statusProviders && S.statusProviders.summarizing) || "configurado")}. Você revisa antes de entrar no registro.</p>`,
     actions: [{ label: "Cancelar", value: null }, { label: "Buscar", cls: "primary", value: "ok", handler: () => {
-      S.wikiRequest = { universe: $("#wk-universe").value, names: $("#wk-names").value.split(/[\n,]/).map(s => s.trim()).filter(Boolean) };
+      S.wikiRequest = { kind, universe: $("#wk-universe").value, names: $("#wk-names").value.split(/[\n,]/).map(s => s.trim()).filter(Boolean) };
       if (!S.wikiRequest.names.length) { toast("Digite pelo menos um nome.", "warn"); return false; }
     } }],
     onOpen: () => $("#wk-names").focus(),
   });
   if (r !== "ok") return;
-  S.wiki = { results: [], total: S.wikiRequest.names.length };
+  S.wiki = { results: [], kind };
+  startWikiImport(S.wikiRequest, { parent });
+}
+
+function onWikiResult(e) {
+  if (e.project !== S.slug) return;
+  if (!S.wiki) S.wiki = { results: [], kind: e.kind || "character" };
+  const row = { ...e.result, universe: e.universe, include: e.result.found, parent: S.wiki.parent || "", subPicked: [] };
+  if (S.wiki.replaceIndex != null && S.wiki.results[S.wiki.replaceIndex]) {
+    row.parent = S.wiki.results[S.wiki.replaceIndex].parent;
+    S.wiki.results[S.wiki.replaceIndex] = row;
+    S.wiki.replaceIndex = null;
+  } else {
+    S.wiki.results.push(row);
+  }
+  S.wiki.pending = Math.max(0, (S.wiki.pending || 1) - 1);
   renderWikiReview();
-  try { await api("POST", `/api/projects/${S.slug}/wiki/import`, S.wikiRequest); } catch (e) { fail(e); S.wiki = null; renderWikiReview(); }
 }
 
 function renderWikiReview() {
@@ -947,29 +1061,40 @@ function renderWikiReview() {
   if (!S.wiki || S.panel !== "cast" || !S.cast) { box.innerHTML = ""; return; }
   const running = !!(S.job && S.job.kind === "wiki" && S.job.project === S.slug);
   const res = S.wiki.results;
+  const isLoc = S.wiki.kind === "location";
   const rows = res.map((r, i) => {
-    const dup = r.found && findCharacter(r.name);
+    const list = isLoc ? S.cast.locations : S.cast.characters;
+    const dup = r.found && findByName(list, r.name);
+    const cands = (r.candidates || []).length
+      ? `<div class="wiki-info">Outra página: <select data-cand><option value="">—</option>${r.candidates.map(c => `<option>${esc(c)}</option>`).join("")}</select></div>` : "";
     const info = r.found
-      ? `${esc(r.universe)} · página: ${esc(r.page_title)}<br>${esc(r.url)}${dup ? '<br><span class="dup">Já existe no registro: a ficha dele será substituída.</span>' : ""}`
+      ? `${esc(r.universe)} · página: ${esc(r.page_title)}${r.parent ? ` · dentro de ${esc(r.parent)}` : ""}<br>${esc(r.url)}${dup ? '<br><span class="dup">Já existe no registro: a ficha será substituída.</span>' : ""}`
       : `<span class="err">${esc(r.error)}</span>`;
+    const subs = isLoc && (r.sublocations || []).length
+      ? `<div class="wiki-subs"><div class="muted">Sublocais listados na página (marque para importar depois, dentro de ${esc(r.name)}):</div>
+          <div class="chips">${r.sublocations.map(s => `<span class="chip toggle ${r.subPicked.includes(s) ? "on" : ""}" data-sub="${esc(s)}">${esc(s)}</span>`).join("")}</div>
+          <button type="button" data-sub-go ${r.subPicked.length && !running ? "" : "disabled"}>⇩ Importar ${r.subPicked.length} sublocal(is)</button></div>` : "";
     return `<div class="wiki-row" data-i="${i}">
       <input type="checkbox" data-w="include" ${r.include ? "checked" : ""} ${r.found ? "" : "disabled"}>
-      <div><input data-w="name" value="${esc(r.name)}" ${r.found ? "" : "disabled"}><div class="wiki-info">${info}</div></div>
-      ${r.found ? `<textarea data-w="sheet">${esc(r.sheet)}</textarea>` : "<div></div>"}
+      <div><input data-w="name" value="${esc(r.name)}" ${r.found ? "" : "disabled"}><div class="wiki-info">${info}</div>${cands}</div>
+      <div>${r.found ? `<textarea data-w="sheet">${esc(r.sheet)}</textarea>` : ""}${isLoc ? imageStrip(r.images) : ""}${subs}</div>
     </div>`;
   }).join("");
   const chosen = res.filter(r => r.found && r.include).length;
-  const head = running ? `(${res.length}/${S.wiki.total || "?"}, buscando…)` : `(${res.length} resultado(s))`;
+  const head = running ? `(${res.length} pronto(s), buscando…)` : `(${res.length} resultado(s))`;
+  const what = isLoc ? "Os marcados entram na aba Locais com o universo, o local de dentro e as imagens." : "Os marcados entram no registro com o universo de origem e na lista de permitidos do universo.";
   box.innerHTML = `<div class="wiki-box">
-    <h3>Importação da Wiki <span class="muted">${head}</span></h3>
-    <p class="muted">Revise nome e ficha. Os marcados entram no registro com o universo de origem e na lista de permitidos do universo.</p>
+    <h3>Importação da Wiki: ${isLoc ? "locais" : "personagens"} <span class="muted">${head}</span></h3>
+    <p class="muted">Revise nome e ficha. ${what}</p>
     ${rows || '<p class="muted">Aguardando o primeiro resultado…</p>'}
     <div class="tab-tools" style="margin-top:10px">
       <button class="primary" id="btn-wiki-apply" ${running || !chosen ? "disabled" : ""}>Adicionar ${chosen} ao registro</button>
       <button id="btn-wiki-discard" ${running ? "disabled" : ""}>Descartar</button>
     </div></div>`;
+  bindImages(box);
   $$(".wiki-row", box).forEach(row => {
-    const r = res[parseInt(row.dataset.i, 10)];
+    const i = parseInt(row.dataset.i, 10);
+    const r = res[i];
     $$("[data-w]", row).forEach(el => {
       el.addEventListener("input", () => {
         if (el.dataset.w === "include") { r.include = el.checked; renderWikiReview(); }
@@ -977,6 +1102,24 @@ function renderWikiReview() {
       });
       if (el.dataset.w === "name") el.addEventListener("change", renderWikiReview);
     });
+    const cand = $("[data-cand]", row);
+    if (cand) cand.onchange = () => {
+      if (!cand.value || running) return;
+      startWikiImport({ kind: S.wiki.kind, universe: r.universe, names: [r.name], exact_title: cand.value }, { replaceIndex: i });
+    };
+    $$("[data-sub]", row).forEach(chip => {
+      chip.onclick = () => {
+        const s = chip.dataset.sub;
+        r.subPicked = r.subPicked.includes(s) ? r.subPicked.filter(x => x !== s) : [...r.subPicked, s];
+        renderWikiReview();
+      };
+    });
+    const go = $("[data-sub-go]", row);
+    if (go) go.onclick = () => {
+      const names = r.subPicked.filter(s => !res.some(x => x.name.toLowerCase() === s.toLowerCase()));
+      r.subPicked = [];
+      if (names.length) startWikiImport({ kind: "location", universe: r.universe, names }, { parent: r.name });
+    };
   });
   const apply = $("#btn-wiki-apply");
   if (apply) apply.onclick = applyWiki;
@@ -985,22 +1128,49 @@ function renderWikiReview() {
 }
 
 async function applyWiki() {
+  const isLoc = S.wiki.kind === "location";
   const picked = S.wiki.results.filter(r => r.found && r.include && r.name.trim());
-  for (const r of picked) {
-    const uni = S.cast.universes.find(u => u.name === r.universe);
-    let c = findCharacter(r.name);
-    if (c) {
-      c.sheet = r.sheet.trim();
-      if (!c.universe && uni) c.universe = uni.id;
-    } else {
-      c = { name: r.name.trim(), role: "supporting", origin: "", age: "", universe: uni ? uni.id : "",
-            notes: `Wiki: ${r.url}`, sheet: r.sheet.trim(), sheet_label: "" };
-      S.cast.characters.push(c);
+  if (isLoc) {
+    const incoming = new Set(picked.map(r => r.name.trim().toLowerCase()));
+    // Local que aparece nos sublocais de outro (a wiki de Atlantis lista o Chair room) fica dentro dele.
+    for (const r of picked) {
+      if (r.parent) continue;
+      const keys = [r.name, r.page_title].filter(Boolean).map(x => x.toLowerCase());
+      const host = picked.find(o => o !== r && (o.sublocations || []).some(s => keys.includes(s.toLowerCase())));
+      if (host) r.parent = host.name;
     }
-    if (uni && !uni.allowed_characters.some(a => a.toLowerCase() === c.name.toLowerCase())) uni.allowed_characters.push(c.name);
+    for (const r of picked) {
+      const uni = S.cast.universes.find(u => u.name === r.universe);
+      const parentOk = r.parent && (findByName(S.cast.locations, r.parent) || incoming.has(r.parent.toLowerCase()));
+      let loc = findByName(S.cast.locations, r.name);
+      const data = { model_sheet: r.sheet.trim(), url: r.url, wiki_page: r.page_title, images: r.images || [] };
+      if (loc) {
+        Object.assign(loc, data);
+        if (!loc.universe && uni) loc.universe = uni.id;
+        if (!loc.parent && parentOk) loc.parent = r.parent;
+      } else {
+        S.cast.locations.push({ name: r.name.trim(), universe: uni ? uni.id : "", parent: parentOk ? r.parent : "",
+                                always: false, notes: "", ...data });
+      }
+    }
+    S.castTab = "locations";
+  } else {
+    for (const r of picked) {
+      const uni = S.cast.universes.find(u => u.name === r.universe);
+      let c = findByName(S.cast.characters, r.name);
+      if (c) {
+        c.sheet = r.sheet.trim();
+        if (!c.universe && uni) c.universe = uni.id;
+      } else {
+        c = { name: r.name.trim(), role: "supporting", origin: "", age: "", universe: uni ? uni.id : "",
+              notes: `Wiki: ${r.url}`, sheet: r.sheet.trim(), sheet_label: "" };
+        S.cast.characters.push(c);
+      }
+      if (uni && !uni.allowed_characters.some(a => a.toLowerCase() === c.name.toLowerCase())) uni.allowed_characters.push(c.name);
+    }
+    S.castTab = "characters";
   }
-  S.castTab = "characters";
-  S.castSel = S.cast.characters.length - 1;
+  S.castSel = castItems().length - 1;
   S.wiki = null;
   await saveCast();
   renderWikiReview();
@@ -1057,6 +1227,13 @@ function renderPremiseForm() {
     const on = f.characters.some(c => c.toLowerCase() === n.toLowerCase());
     return `<span class="chip toggle ${on ? "on" : ""}" data-char="${esc(n)}">${esc(n)}</span>`;
   }).join("");
+  f.locations = f.locations || [];
+  const knownLocs = d.locations || [];
+  const extraLocs = f.locations.filter(n => !knownLocs.some(k => k.toLowerCase() === n.toLowerCase()));
+  const locChips = [...knownLocs, ...extraLocs].map(n => {
+    const on = f.locations.some(c => c.toLowerCase() === n.toLowerCase());
+    return `<span class="chip toggle ${on ? "on" : ""}" data-loc="${esc(n)}">${esc(n)}</span>`;
+  }).join("");
   const total = f.scenes.reduce((a, s) => a + (parseInt(s.words, 10) || 0), 0);
   const scenes = f.scenes.map((s, i) => `
     <div class="scene-row" data-scene="${i}">
@@ -1077,6 +1254,8 @@ function renderPremiseForm() {
     <label>Abertura: onde e como começa<textarea data-pf="opening" class="pf-short" placeholder="Continua de onde o capítulo anterior parou: mesmo lugar, mesma luz, mesma situação.">${esc(f.opening)}</textarea></label>
     <div class="pf-label">Personagens em cena <span class="muted">(clique para marcar; só as fichas deles vão reforçadas no fim de cada cena)</span></div>
     <div class="chips">${chips || '<span class="muted">Cadastre personagens em Personagens e universos.</span>'}<span class="chip add" data-char-add>+ outro</span></div>
+    <div class="pf-label">Locais em cena <span class="muted">(as fichas deles vão no fim de cada cena: planta, o que existe e o que nunca existe ali)</span></div>
+    <div class="chips">${locChips || '<span class="muted">Cadastre locais na aba Locais de Personagens e universos.</span>'}</div>
     <div class="pf-label">Cenas <span class="muted">${total ? `${total} de ~${d.target_words} palavras` : `meta do capítulo: ~${d.target_words} palavras`}</span></div>
     <div id="scene-rows">${scenes || '<p class="muted">Nenhuma cena. Sem cenas, o modelo divide a premissa sozinho.</p>'}</div>
     <div class="tab-tools"><button type="button" id="btn-scene-add">+ Cena</button>
@@ -1092,6 +1271,15 @@ function renderPremiseForm() {
       const n = ch.dataset.char;
       const i = f.characters.findIndex(c => c.toLowerCase() === n.toLowerCase());
       if (i >= 0) f.characters.splice(i, 1); else f.characters.push(n);
+      markPremiseDirty();
+      renderPremiseForm();
+    };
+  });
+  $$("[data-loc]", box).forEach(ch => {
+    ch.onclick = () => {
+      const n = ch.dataset.loc;
+      const i = f.locations.findIndex(c => c.toLowerCase() === n.toLowerCase());
+      if (i >= 0) f.locations.splice(i, 1); else f.locations.push(n);
       markPremiseDirty();
       renderPremiseForm();
     };
@@ -1232,6 +1420,15 @@ const SETTINGS_FIELDS = [
   ]],
 ];
 
+function uiLangOptions(selected) {
+  const all = (S.languages && S.languages.all) || {};
+  const ui = (S.languages && S.languages.ui) || ["pt-BR"];
+  // Idiomas sem tradução da interface ainda aparecem, marcados: o programa escreve resumos e fichas
+  // nesse idioma, e a tela fica em português até alguém traduzir.
+  return Object.entries(all).map(([code, name]) =>
+    `<option value="${code}" ${code === selected ? "selected" : ""}>${esc(name)}${ui.includes(code) ? "" : " *"}</option>`).join("");
+}
+
 async function openSettings() {
   let data;
   try { data = await api("GET", "/api/settings"); } catch (e) { return fail(e); }
@@ -1268,7 +1465,9 @@ async function openSettings() {
   await openDialog({
     title: "Configurações",
     wide: true,
-    body: `<label>Perfil<select data-key="HARDWARE_PROFILE" id="st-profile">${profileOpts}</select></label>
+    body: `<label>Idioma da interface<select data-key="UI_LANGUAGE" id="st-ui-lang">${uiLangOptions(v.UI_LANGUAGE)}</select></label>
+      <p class="muted">Vale para a tela e para tudo o que o programa escreve para você ler: resumos, memória, fichas, sugestões e conferências. O idioma dos capítulos é escolhido em cada projeto.</p>
+      <label>Perfil<select data-key="HARDWARE_PROFILE" id="st-profile">${profileOpts}</select></label>
       <p class="muted" id="st-profile-note"></p>
       <div class="settings-section"><h4>Modelos por fase</h4>
         <p class="muted">Cada fase pode usar o Ollama (no seu computador) ou um serviço na nuvem. Na nuvem o texto da história é enviado para a empresa do modelo e cada capítulo gasta créditos da sua conta.</p>
@@ -1286,6 +1485,15 @@ async function openSettings() {
         <label>Endereço do serviço compatível com OpenAI<input data-key="OPENAI_COMPAT_BASE_URL" value="${esc(v.OPENAI_COMPAT_BASE_URL)}"></label>
       </div>
       ${sections}
+      <div class="settings-section"><h4>Reserva local</h4>
+        <p class="muted">Quando um serviço na nuvem esgota o limite de uso ou de crédito, fica sobrecarregado ou para de responder, a geração continua no Ollama com o modelo abaixo. O serviço fica de lado pelos minutos escolhidos e depois volta a ser tentado. Chave errada ou modelo inexistente não trocam: aparecem como erro.</p>
+        <label class="check"><input type="checkbox" data-key="CLOUD_FALLBACK" ${v.CLOUD_FALLBACK ? "checked" : ""}> Trocar para o modelo local quando a nuvem falhar</label>
+        <div class="form-grid">
+          <label>Modelo local de reserva<input data-key="CLOUD_FALLBACK_MODEL" list="dl-FALLBACK" value="${esc(v.CLOUD_FALLBACK_MODEL ?? "")}"><datalist id="dl-FALLBACK"></datalist></label>
+          <label>Minutos antes de voltar à nuvem<input data-key="CLOUD_FALLBACK_MINUTES" type="number" step="5" min="0" value="${v.CLOUD_FALLBACK_MINUTES ?? 30}"></label>
+        </div>
+        <div class="inline-row"><button type="button" id="st-resume-cloud">Voltar a usar a nuvem agora</button><span class="muted" id="st-resume-msg"></span></div>
+      </div>
       <label class="check"><input type="checkbox" data-key="CONSISTENCY_CHECK_ENABLED" ${v.CONSISTENCY_CHECK_ENABLED ? "checked" : ""}> Checagem de consistência depois de cada capítulo</label>
       <p class="muted">Pasta de dados: <code>${esc(data.data_dir)}</code><br>Log: <code>${esc(data.log_file)}</code></p>`,
     actions: [
@@ -1294,6 +1502,11 @@ async function openSettings() {
         const values = {};
         $$("#dlg [data-key]").forEach(el => { values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value; });
         await api("PUT", "/api/settings", { values });
+        if (values.UI_LANGUAGE && values.UI_LANGUAGE !== I18N.lang) {
+          toast("Configurações salvas. A interface vai recarregar no novo idioma.");
+          setTimeout(() => location.reload(), 900);
+          return;
+        }
         toast("Configurações salvas. Valem a partir da próxima geração.");
         pollStatus();
       } },
@@ -1303,7 +1516,20 @@ async function openSettings() {
         const prov = $(`#dlg [data-key="PROVIDER_${ph}"]`).value;
         $(`#dl-${ph}`).innerHTML = (models[prov] || []).map(m => `<option value="${esc(m)}">`).join("");
       };
-      const fillAll = () => PHASES.forEach(([ph]) => fillModels(ph));
+      const fillAll = () => {
+        PHASES.forEach(([ph]) => fillModels(ph));
+        $("#dl-FALLBACK").innerHTML = models.ollama.map(m => `<option value="${esc(m)}">`).join("");
+      };
+      const pausedNow = Object.keys(S.cloudPaused || {});
+      $("#st-resume-msg").textContent = pausedNow.length ? `De lado agora: ${pausedNow.join(", ")}.` : "Nenhum serviço de lado agora.";
+      $("#st-resume-cloud").onclick = async () => {
+        try {
+          await api("POST", "/api/cloud/resume");
+          S.cloudPaused = {};
+          $("#st-resume-msg").textContent = "Pronto: a próxima geração tenta a nuvem de novo.";
+          pollStatus();
+        } catch (e) { $("#st-resume-msg").textContent = e.message; }
+      };
       $$("#dlg [data-phase]").forEach(sel => { sel.onchange = () => fillModels(sel.dataset.phase); });
 
       const note = () => { const p = data.profiles[$("#st-profile").value]; $("#st-profile-note").textContent = p ? p.note : ""; };
@@ -1395,6 +1621,7 @@ function bind() {
   $("#btn-save-state").onclick = saveState;
   $("#btn-save-akashic").onclick = saveAkashic;
   $("#btn-export").onclick = exportBook;
+  $("#btn-save-meta").onclick = () => saveBookMeta().catch(fail);
   $("#btn-save-cast").onclick = saveCast;
   $("#btn-cast-add").onclick = addCastItem;
   $("#btn-wiki-import").onclick = () => openWikiDialog();
@@ -1411,8 +1638,14 @@ function bind() {
   });
 }
 
-bind();
-connectEvents();
-pollStatus();
-setInterval(pollStatus, 15000);
-loadProjects();
+async function boot() {
+  try { S.languages = await api("GET", "/api/languages"); } catch { S.languages = null; }
+  await initI18n(S.languages ? S.languages.ui_language : "pt-BR");
+  bind();
+  connectEvents();
+  pollStatus();
+  setInterval(pollStatus, 15000);
+  loadProjects();
+}
+
+boot();

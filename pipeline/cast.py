@@ -14,7 +14,8 @@ from dataclasses import asdict
 
 from pipeline.akashic import build_registro_modelo
 from pipeline.akashic_migrate import migrate_text
-from pipeline.akashic_schema import ROLES, STRUCTURES, AkashicMeta, Character, Universe, read_meta, slugify, write_meta
+from pipeline.akashic_schema import (ROLES, STRUCTURES, AkashicMeta, Character, Location, Universe, read_meta,
+                                     slugify, write_meta)
 from pipeline.akashic_sync import import_lists_from_body, render_lists_into_body
 from pipeline.io_utils import read_file, write_file
 from pipeline.project import StoryProject
@@ -57,7 +58,8 @@ def migrate(project: StoryProject) -> str:
     return report
 
 
-def validate(characters: list[Character], universes: list[Universe]) -> list[str]:
+def validate(characters: list[Character], universes: list[Universe],
+             locations: list[Location] | None = None) -> list[str]:
     problems = []
     names = [c.name.strip() for c in characters]
     if any(not n for n in names):
@@ -82,11 +84,29 @@ def validate(characters: list[Character], universes: list[Universe]) -> list[str
     for c in characters:
         if c.universe and c.universe not in known:
             problems.append(f"{c.name}: universo de origem '{c.universe}' não existe.")
+    locations = locations or []
+    lnames = [loc.name.strip() for loc in locations]
+    if any(not n for n in lnames):
+        problems.append("Todo local precisa de nome.")
+    dup_l = sorted({n for n in lnames if n and lnames.count(n) > 1})
+    if dup_l:
+        problems.append(f"Local repetido: {', '.join(dup_l)}.")
+    for loc in locations:
+        if loc.universe and loc.universe not in known:
+            problems.append(f"{loc.name}: universo '{loc.universe}' não existe.")
+        if loc.parent and loc.parent not in lnames:
+            problems.append(f"{loc.name}: fica dentro de '{loc.parent}', que não está na lista de locais.")
+        if loc.parent and loc.parent == loc.name:
+            problems.append(f"{loc.name}: um local não pode ficar dentro dele mesmo.")
     return problems
 
 
-def save(project: StoryProject, characters: list[dict], universes: list[dict], structure: str | None = None) -> str:
-    """Grava personagens e universos no registro, gera as listas 5.8/9.5 e recompila o modelo."""
+def save(project: StoryProject, characters: list[dict], universes: list[dict], structure: str | None = None,
+         locations: list[dict] | None = None) -> str:
+    """
+    Grava personagens, universos e locais no registro, gera as listas 5.8/9.5 e recompila o
+    modelo. `locations` None mantém os locais que já estavam.
+    """
     fmt, meta = load(project)
     if fmt != "v2" or meta is None:
         raise ValueError("O Registro Akáshico precisa estar no formato v2. Converta primeiro.")
@@ -101,7 +121,14 @@ def save(project: StoryProject, characters: list[dict], universes: list[dict], s
     for u in unis:
         u.name = u.name.strip()
         u.allowed_characters = [a.strip() for a in u.allowed_characters if a.strip()]
-    problems = validate(chars, unis)
+    if locations is None:
+        locs = list(meta.locations)
+    else:
+        locs = [Location(**{k: v for k, v in loc.items() if k in Location.__dataclass_fields__}) for loc in locations]
+        for loc in locs:
+            loc.name = loc.name.strip()
+            loc.parent = loc.parent.strip()
+    problems = validate(chars, unis, locs)
     if problems:
         raise ValueError(" ".join(problems))
 
@@ -109,6 +136,7 @@ def save(project: StoryProject, characters: list[dict], universes: list[dict], s
     _, body = read_meta(text)
     meta.characters = chars
     meta.universes = unis
+    meta.locations = locs
     if structure in STRUCTURES:
         meta.structure = structure
     meta.lists_synced = True
@@ -124,7 +152,7 @@ def save(project: StoryProject, characters: list[dict], universes: list[dict], s
 
 # ── Cruzamento com a história escrita ────────────────────────
 
-_ROSTER_NAME = re.compile(r"^\s*[*\-]\s*Name\s*:\s*(.+?)\s*$", re.I | re.M)
+_ROSTER_NAME = re.compile(r"^\s*[*\-]\s*(?:Name|Nome|Nombre)\s*:\s*(.+?)\s*$", re.I | re.M)
 
 
 def roster_entries(roster: str) -> list[dict]:
@@ -181,6 +209,7 @@ def overview(project: StoryProject) -> dict:
         "structure": meta.structure if meta else "single",
         "characters": [asdict(c) for c in chars],
         "universes": [asdict(u) for u in unis],
+        "locations": [asdict(loc) for loc in (meta.locations if meta else [])],
         "character_roles": CHARACTER_ROLES,
         "universe_roles": ROLES,
         "structures": STRUCTURES,

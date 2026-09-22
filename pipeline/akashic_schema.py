@@ -62,6 +62,19 @@ class Character:
 
 
 @dataclass
+class Location:
+    name: str
+    universe: str = ""             # id do universo
+    parent: str = ""               # nome do local que contém este (ex.: "Atlantis" para "Chair room")
+    always: bool = False           # True = a ficha vai em toda cena, não só quando o local está em cena
+    model_sheet: str = ""          # ficha curta em inglês para o modelo: planta, o que há ali, o que nunca há
+    notes: str = ""                # notas do autor (não vão para o modelo)
+    wiki_page: str = ""            # título da página na wiki
+    url: str = ""
+    images: list[str] = field(default_factory=list)   # endereços de imagens da wiki, para o autor ver
+
+
+@dataclass
 class AkashicMeta:
     version: int = META_VERSION
     title: str = ""
@@ -69,6 +82,7 @@ class AkashicMeta:
     language: str = "en"
     universes: list[Universe] = field(default_factory=list)
     characters: list[Character] = field(default_factory=list)
+    locations: list[Location] = field(default_factory=list)
     answers: dict = field(default_factory=dict)   # respostas do assistente (para reabrir/refazer)
     # True depois que as listas das seções 5.8 e 9.5 foram importadas do texto para os metadados.
     # A partir daí essas duas listas são geradas a partir dos metadados (ver akashic_sync.py).
@@ -86,6 +100,7 @@ class AkashicMeta:
             language=data.get("language", "en"),
             universes=[Universe(**_known(u, Universe)) for u in data.get("universes", [])],
             characters=[Character(**_known(c, Character)) for c in data.get("characters", [])],
+            locations=[Location(**_known(loc, Location)) for loc in data.get("locations", [])],
             answers=data.get("answers", {}),
             lists_synced=bool(data.get("lists_synced", False)),
         )

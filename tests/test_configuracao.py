@@ -21,7 +21,7 @@ def test_conversao_de_tipos():
     assert config.coerce("DRAFTING_NUM_GPU", "20") == 20
     assert config.coerce("CONSISTENCY_CHECK_ENABLED", "false") is False
     assert config.coerce("CONSISTENCY_CHECK_ENABLED", True) is True
-    assert config.coerce("MODEL_DRAFTING", "  ") == "llama3.1:8b"  # vazio volta ao padrão
+    assert config.coerce("MODEL_DRAFTING", "  ") == "gemma4:12b"  # vazio volta ao padrão
     try:
         config.coerce("DRAFTING_NUM_CTX", "muito")
         raise AssertionError("deveria recusar texto em campo numérico")

@@ -31,10 +31,10 @@
     </div>
     <ol id="chapter-list" class="chapter-list"></ol>
     <div class="side-footer">
-      <button class="link" data-panel="cast">Personagens e universos</button>
+      <button class="link" data-panel="cast">Personagens, locais e universos</button>
       <button class="link" data-panel="story">História até agora</button>
       <button class="link" data-panel="akashic">Registro Akáshico</button>
-      <button class="link" data-panel="export">Exportar livro</button>
+      <button class="link" data-panel="export">Livro: idioma e exportação</button>
     </div>
   </aside>
 
@@ -95,7 +95,7 @@
 
     <div id="panel-cast" class="panel hidden">
       <div class="chapter-head">
-        <h2>Personagens e universos</h2>
+        <h2>Personagens, locais e universos</h2>
         <span class="spacer"></span>
         <span class="muted" id="cast-dirty"></span>
         <button class="primary" id="btn-save-cast">Salvar</button>
@@ -103,6 +103,7 @@
       <div class="notice hidden" id="cast-v1"></div>
       <nav class="tabs" id="cast-tabs">
         <button data-ctab="characters" class="active">Personagens</button>
+        <button data-ctab="locations">Locais</button>
         <button data-ctab="universes">Universos</button>
       </nav>
       <div id="wiki-review"></div>
@@ -137,11 +138,16 @@
     </div>
 
     <div id="panel-export" class="panel hidden">
-      <h2>Exportar livro</h2>
+      <h2>Livro: idioma e exportação</h2>
       <div class="form-grid">
         <label>Título do livro<input id="meta-title" placeholder="usa o nome do projeto"></label>
         <label>Autor<input id="meta-author"></label>
-        <label>Idioma do texto<select id="meta-lang"><option value="en">Inglês</option><option value="pt-BR">Português</option><option value="es">Espanhol</option></select></label>
+        <label>Idioma da história (capítulos e exportação)<select id="meta-lang" data-lang-select></select></label>
+      </div>
+      <p class="muted">Muda só o idioma dos próximos capítulos gerados e do livro exportado. Capítulos prontos não são traduzidos.</p>
+      <div class="tab-tools"><button id="btn-save-meta">Salvar dados do livro</button></div>
+      <h3>Exportar livro</h3>
+      <div class="form-grid">
         <label>Formato<select id="export-format">
           <option value="epub">EPUB (leitores de e-book)</option>
           <option value="md">Markdown (Webnovel, AO3, Wattpad)</option>
@@ -174,6 +180,7 @@
 <dialog id="dlg"><form method="dialog" id="dlg-form"><h3 id="dlg-title"></h3><div id="dlg-body"></div><div class="dlg-actions" id="dlg-actions"></div></form></dialog>
 <div id="toasts"></div>
 
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

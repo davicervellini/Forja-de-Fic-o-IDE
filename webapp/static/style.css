@@ -286,3 +286,10 @@ dialog.wide { width: min(900px, 94vw); }
 .check-box { border: 1px solid var(--amber); background: rgba(227, 163, 59, 0.07); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; font-size: 13.5px; }
 .check-box.ok { border-color: var(--green); background: rgba(79, 180, 119, 0.07); }
 .check-box ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* ── Locais ── */
+.img-strip { display: flex; gap: 8px; overflow-x: auto; margin: 10px 0 4px; }
+.img-strip img { height: 110px; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
+.wiki-subs { margin-top: 8px; }
+.wiki-subs .chips { max-height: 120px; overflow: auto; }
+.wiki-row select { width: auto; max-width: 100%; padding: 3px 6px; font-size: 12px; }

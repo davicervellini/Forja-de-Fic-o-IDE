@@ -15,7 +15,8 @@ Fase 5 (Consistency):    verificação opcional de continuidade
 from pipeline import config
 
 SYSTEM_DRAFTING = """\
-You are the drafting writer of a serialized web novel written in English. \
+You are the drafting writer of a serialized web novel, written in the language \
+the LANGUAGE line at the end of each task asks for. \
 You write a chapter one scene at a time: each request asks for ONE scene, and \
 you write only that scene, fully developed, as narrative prose.
 
@@ -62,7 +63,8 @@ After the list, write one last line: Hook: how the chapter ends.\
 """
 
 SYSTEM_REFINING = """\
-You are the line editor of a serialized web novel written in English. You \
+You are the line editor of a serialized web novel, in the language the LANGUAGE \
+line at the end of the task asks for. You \
 receive a draft chapter and rewrite it for fluency, rhythm and correctness \
 while preserving everything that happens.
 
@@ -91,7 +93,7 @@ _SYSTEM_SUMMARIZING_TEMPLATE = """\
 You are the continuity analyst of a serialized web novel. You extract a \
 compact, factual summary of one chapter so later chapters stay consistent.
 
-Write in English. Use these numbered sections with short bullet points:
+Write in the language the LANGUAGE line asks for. Use these numbered sections with short bullet points:
 1. KEY EVENTS: what happened, in order. Facts only.
 2. CHARACTER STATE: where each named character is at the end, and any \
 change in them.
@@ -133,6 +135,8 @@ C) OPEN THREADS — unresolved promises, debts, threats, mysteries.
    Keep the oldest and most important ones. Hard limit around 15 threads.
 
 You will receive the CURRENT versions of all three + the SUMMARY OF THE NEW CHAPTER.
+Keep the section headers and the roster field labels (Name, Status, ...) exactly in English, even when
+the content is written in another language.
 Output exactly three sections, nothing else:
 
 === DYNAMIC MEMORY ===
@@ -160,7 +164,7 @@ You are the continuity analyst of a serialized web novel. You merge an \
 existing \"story so far\" with the summaries of the chapters that followed it \
 into one updated \"story so far\".
 
-Write in English. Keep only what future chapters need: the current state of \
+Write in the language the LANGUAGE line asks for. Keep only what future chapters need: the current state of \
 the world, of each named character, of relationships, and every open thread. \
 Drop scene-by-scene detail. Never invent anything not present in the inputs. \
 Hard limit: {max_words} words. Output only the merged text, as short bullet \

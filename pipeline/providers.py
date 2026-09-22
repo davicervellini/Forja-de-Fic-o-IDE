@@ -42,13 +42,13 @@ PROVIDERS: dict[str, dict] = {
         "label": "Anthropic (Claude)",
         "cloud": True,
         "key_url": "https://console.anthropic.com/settings/keys",
-        "suggested": ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
+        "suggested": ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
     },
     "google": {
         "label": "Google (Gemini)",
         "cloud": True,
         "key_url": "https://aistudio.google.com/apikey",
-        "suggested": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "suggested": ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"],
     },
     "openai": {
         "label": "OpenAI (GPT)",
@@ -76,7 +76,26 @@ RETRY_DELAYS = (4, 12)
 
 
 class ProviderError(OllamaError):
-    """Erro de um provedor na nuvem. É um OllamaError para o pipeline tratar do mesmo jeito."""
+    """
+    Erro de um provedor na nuvem. É um OllamaError para o pipeline tratar do mesmo jeito.
+    `unavailable` marca os erros em que vale trocar para o modelo local: limite de uso ou de
+    crédito, servidor sobrecarregado ou fora do ar, conexão perdida. Chave errada, modelo
+    inexistente e recusa de conteúdo não trocam: o problema continuaria depois.
+    """
+
+    def __init__(self, message: str, unavailable: bool = False):
+        super().__init__(message)
+        self.unavailable = unavailable
+
+
+# Palavras que, num erro 400/403, indicam falta de crédito ou cota, e não um pedido errado.
+QUOTA_WORDS = ("quota", "credit", "billing", "exhausted", "rate limit", "usage limit", "insufficient")
+
+
+def _unavailable(status: int, message: str) -> bool:
+    if status in RETRY_STATUS or status == 402:
+        return True
+    return status in (400, 403) and any(w in message.lower() for w in QUOTA_WORDS)
 
 
 def is_cloud(provider: str) -> bool:
@@ -250,7 +269,7 @@ def generate_cloud(
         try:
             response = requests.post(url, headers=headers, json=body, stream=True, timeout=(30, timeout))
         except requests.RequestException as e:
-            raise ProviderError(f"Sem conexão com {label(provider)}: {e}") from e
+            raise ProviderError(f"Sem conexão com {label(provider)}: {e}", unavailable=True) from e
 
         if response.status_code != 200:
             msg = _error_message(provider, response, model)
@@ -267,7 +286,7 @@ def generate_cloud(
                 if cancel_event is not None and cancel_event.wait(delay):
                     raise GenerationInterrupted("")
                 continue
-            raise ProviderError(msg)
+            raise ProviderError(msg, unavailable=_unavailable(response.status_code, msg))
 
         try:
             for piece in _pieces(provider, response):
@@ -280,7 +299,7 @@ def generate_cloud(
         except requests.RequestException as e:
             if text:
                 raise GenerationInterrupted(text, f"Conexão com {label(provider)} caiu no meio do texto.") from e
-            raise ProviderError(f"Conexão com {label(provider)} caiu: {e}") from e
+            raise ProviderError(f"Conexão com {label(provider)} caiu: {e}", unavailable=True) from e
         finally:
             response.close()
         if cancel_event is not None and cancel_event.is_set():

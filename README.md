@@ -52,8 +52,14 @@ mudar as configurações. A tela **Personagens e universos** edita as fichas que
 o modelo (seções 5.8 e 9.5 do Registro), mostra em que capítulos cada personagem aparece
 e lista quem surgiu na memória da história sem ficha no registro. O botão **Importar da
 Wiki** busca personagens na wiki do Fandom do universo (campo Wiki na aba Universos), o
-modelo da fase de resumo escreve a ficha em inglês e você revisa antes de ela entrar no
-registro, com o universo de origem e a lista de permitidos. O assistente de criação
+modelo da fase de resumo escreve a ficha no seu idioma e você revisa antes de ela entrar no
+registro, com o universo de origem e a lista de permitidos. A aba **Locais** guarda os
+lugares canônicos: ficha para o modelo (planta, o que existe ali, estado na época da
+história e uma frase "Never:" com o que não existe no lugar), "fica dentro de",
+"sempre no contexto" e as imagens da wiki. **Importar da Wiki** nessa aba busca a página
+pelo nome exato, escreve a ficha com a época do universo, deixa escolher outra página e
+sugere os sublocais listados na página. Na premissa, **Locais em cena** manda as fichas
+desses locais para o fim de cada cena. O assistente de criação
 continua na interface antiga até ser migrado.
 
 A aba **Premissa** tem um formulário guiado: título, objetivo, abertura (continuidade com
@@ -64,6 +70,15 @@ memória, e tira do elenco quem ainda não estreou; **🔎 Conferir** aponta con
 antes de gerar. O elenco e as restrições da premissa vão reforçados no fim do prompt de
 cada cena, e parágrafos de narração muito longos são quebrados no fim de uma frase.
 
+O programa trabalha com dois idiomas. O **idioma da interface** (⚙ Configurações) vale
+para a tela e para tudo o que o programa escreve para você ler: resumos, memória, fichas
+de personagens e locais, sugestões e conferências de premissa. O **idioma da história**
+é escolhido em cada projeto (ao criar, ou em **Livro: idioma e exportação**) e vale só
+para o texto dos capítulos e para o livro exportado. Mudar o idioma da história não
+traduz capítulos prontos. A interface tem tradução para português e inglês; para
+acrescentar outra, copie `webapp/static/i18n/en.json` para `<código>.json`, traduza os
+valores e inclua o código em `UI_TRANSLATED` (`pipeline/languages.py`).
+
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
 
@@ -73,6 +88,14 @@ API da OpenAI (OpenRouter, por exemplo). As chaves de API são cadastradas em
 ⚙ Configurações e ficam em `credenciais.json` na pasta de dados do usuário, fora do git;
 variáveis de ambiente como `ANTHROPIC_API_KEY` também valem. Na nuvem o texto da
 história é enviado para o provedor e cada capítulo gasta créditos da conta.
+
+**Reserva local.** Quando um provedor na nuvem esgota o limite de uso ou de crédito, fica
+sobrecarregado ou para de responder, a geração continua no Ollama com o modelo de reserva
+(padrão `gemma4:12b`) e a tela avisa. O provedor fica de lado por 30 minutos (ajustável) e
+depois volta a ser tentado; **Voltar a usar a nuvem agora** em ⚙ Configurações encurta a
+espera. Chave errada, modelo inexistente e recusa de conteúdo não trocam: aparecem como erro.
+Os pedidos ao Ollama saem com `think: false`, porque modelos que raciocinam antes de
+responder (gemma4, qwen3) gastariam o teto de tokens pensando.
 
 ### Interface Gráfica antiga (customtkinter)
 

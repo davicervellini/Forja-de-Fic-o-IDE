@@ -75,15 +75,17 @@ def ensure_data_dirs():
 
 _SPEC: dict[str, tuple[str, object]] = {
     "OLLAMA_BASE_URL": ("str", "http://127.0.0.1:11434"),
+    # Idioma da interface e de tudo o que o programa escreve para a pessoa ler (não o da história).
+    "UI_LANGUAGE": ("str", "pt-BR"),
     "HARDWARE_PROFILE": ("str", "custom"),
     # Provedor de cada fase: "ollama" (local) ou um serviço na nuvem (pipeline/providers.py).
     "PROVIDER_DRAFTING": ("provider", "ollama"),
     "PROVIDER_REFINING": ("provider", "ollama"),
     "PROVIDER_SUMMARIZING": ("provider", "ollama"),
     "OPENAI_COMPAT_BASE_URL": ("str", "https://openrouter.ai/api/v1"),
-    "MODEL_DRAFTING": ("str", "llama3.1:8b"),
-    "MODEL_REFINING": ("str", "gemma3:12b"),
-    "MODEL_SUMMARIZING": ("str", "llama3.1:8b"),
+    "MODEL_DRAFTING": ("str", "gemma4:12b"),
+    "MODEL_REFINING": ("str", "gemma4:12b"),
+    "MODEL_SUMMARIZING": ("str", "gemma4:12b"),
     "DRAFTING_TEMPERATURE": ("float", 0.7),
     "DRAFTING_NUM_CTX": ("int", 12288),
     "REFINING_TEMPERATURE": ("float", 0.4),
@@ -110,18 +112,22 @@ _SPEC: dict[str, tuple[str, object]] = {
     "REFINE_MIN_RATIO": ("float", 0.7),
     "CONSISTENCY_CHECK_ENABLED": ("bool", True),
     "REQUEST_TIMEOUT": ("int", 3600),
+    "CLOUD_FALLBACK": ("bool", True),
+    "CLOUD_FALLBACK_MODEL": ("str", "gemma4:12b"),
+    "CLOUD_FALLBACK_MINUTES": ("int", 30),
 }
 
 # Chaves que a tela ⚙ Configurações edita e grava no config.json. As outras continuam só no .env,
 # porque alguns prompts usam o valor delas na hora do import.
 UI_KEYS = [
-    "OLLAMA_BASE_URL", "HARDWARE_PROFILE",
+    "OLLAMA_BASE_URL", "HARDWARE_PROFILE", "UI_LANGUAGE",
     "PROVIDER_DRAFTING", "PROVIDER_REFINING", "PROVIDER_SUMMARIZING", "OPENAI_COMPAT_BASE_URL",
     "MODEL_DRAFTING", "MODEL_REFINING", "MODEL_SUMMARIZING",
     "DRAFTING_TEMPERATURE", "REFINING_TEMPERATURE", "SUMMARIZING_TEMPERATURE",
     "DRAFTING_NUM_CTX", "REFINING_NUM_CTX", "SUMMARIZING_NUM_CTX",
     "DRAFTING_NUM_GPU", "REFINING_NUM_GPU", "SUMMARIZING_NUM_GPU",
     "CHAPTER_TARGET_WORDS", "CONSISTENCY_CHECK_ENABLED", "REQUEST_TIMEOUT",
+    "CLOUD_FALLBACK", "CLOUD_FALLBACK_MODEL", "CLOUD_FALLBACK_MINUTES",
 ]
 
 
@@ -191,6 +197,7 @@ _values.update(load_user_settings())
 OLLAMA_BASE_URL: str = _values["OLLAMA_BASE_URL"]
 OLLAMA_GENERATE_URL: str = f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate"
 HARDWARE_PROFILE: str = _values["HARDWARE_PROFILE"]
+UI_LANGUAGE: str = _values["UI_LANGUAGE"]
 PROVIDER_DRAFTING: str = _values["PROVIDER_DRAFTING"]
 PROVIDER_REFINING: str = _values["PROVIDER_REFINING"]
 PROVIDER_SUMMARIZING: str = _values["PROVIDER_SUMMARIZING"]
@@ -232,6 +239,11 @@ CHAPTER_SO_FAR_TAIL_WORDS: int = _values["CHAPTER_SO_FAR_TAIL_WORDS"]
 REFINE_MIN_RATIO: float = _values["REFINE_MIN_RATIO"]
 CONSISTENCY_CHECK_ENABLED: bool = _values["CONSISTENCY_CHECK_ENABLED"]
 REQUEST_TIMEOUT: int = _values["REQUEST_TIMEOUT"]
+# Reserva local: quando um provedor na nuvem esgota o limite de uso ou para de responder, a
+# geração continua no Ollama com este modelo, e o provedor fica de lado por alguns minutos.
+CLOUD_FALLBACK: bool = _values["CLOUD_FALLBACK"]
+CLOUD_FALLBACK_MODEL: str = _values["CLOUD_FALLBACK_MODEL"]
+CLOUD_FALLBACK_MINUTES: int = _values["CLOUD_FALLBACK_MINUTES"]
 
 
 def current_settings() -> dict:

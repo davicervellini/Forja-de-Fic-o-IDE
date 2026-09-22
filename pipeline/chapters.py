@@ -197,6 +197,6 @@ def save_final_text(project: StoryProject, num: int, text: str) -> str:
 def chapter_title(text: str, num: int) -> str:
     lines = (text or "").strip().splitlines()
     first = lines[0].strip().lstrip("#").strip() if lines else ""
-    if first.lower().startswith(("chapter", "capítulo", "capitulo")):
+    if first.lower().startswith(("chapter", "capítulo", "capitulo", "chapitre", "kapitel", "capitolo")):
         return first
     return f"Capítulo {num:02d}"

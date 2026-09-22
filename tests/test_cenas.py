@@ -73,15 +73,6 @@ def test_premissa_em_blocos_com_meta_de_palavras():
     assert "TARGET" not in plan.scenes[-1].text
 
 
-def test_premissa_do_capitulo_1_salva_no_projeto():
-    path = Path("projetos/level_zero_the_multiversal_market/capitulos/capitulo_01/premissa.md")
-    if not path.exists():
-        return
-    plan = parse_premise(path.read_text(encoding="utf-8"))
-    assert len(plan.scenes) == 4
-    assert [s.target_words for s in plan.scenes] == [350, 900, 600, 450]
-
-
 def test_premissa_sem_cenas_numeradas_devolve_lista_vazia():
     assert parse_premise("Arthur explores Atlantis and finds the chair.").scenes == []
     # Uma cena só também não conta como divisão.

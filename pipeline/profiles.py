@@ -21,12 +21,12 @@ PROFILES: dict[str, dict] = {
     },
     "vram8": {
         "label": "6 a 8 GB de VRAM (ex.: RX 580, GTX 1070, RTX 2060)",
-        "note": "O polimento com gemma3:12b não cabe inteiro em 8 GB e roda em parte na CPU. "
-                "Defina OLLAMA_NUM_PARALLEL=1 no Windows para o rascunho caber inteiro na GPU.",
+        "note": "gemma4:12b nas três fases: um modelo só, sem troca entre as fases. Em 8 GB parte dele "
+                "roda na CPU. Defina OLLAMA_NUM_PARALLEL=1 no Windows para sobrar mais memória de vídeo.",
         "values": {
-            "MODEL_DRAFTING": "llama3.1:8b",
-            "MODEL_REFINING": "gemma3:12b",
-            "MODEL_SUMMARIZING": "llama3.1:8b",
+            "MODEL_DRAFTING": "gemma4:12b",
+            "MODEL_REFINING": "gemma4:12b",
+            "MODEL_SUMMARIZING": "gemma4:12b",
             "DRAFTING_NUM_CTX": 12288,
             "REFINING_NUM_CTX": 10240,
             "SUMMARIZING_NUM_CTX": 8192,
@@ -34,11 +34,11 @@ PROFILES: dict[str, dict] = {
     },
     "vram12": {
         "label": "10 a 12 GB de VRAM (ex.: RTX 3060 12 GB, RX 6700 XT)",
-        "note": "Os dois modelos cabem na GPU, um de cada vez.",
+        "note": "gemma4:12b cabe inteiro na GPU.",
         "values": {
-            "MODEL_DRAFTING": "llama3.1:8b",
-            "MODEL_REFINING": "gemma3:12b",
-            "MODEL_SUMMARIZING": "llama3.1:8b",
+            "MODEL_DRAFTING": "gemma4:12b",
+            "MODEL_REFINING": "gemma4:12b",
+            "MODEL_SUMMARIZING": "gemma4:12b",
             "DRAFTING_NUM_CTX": 16384,
             "REFINING_NUM_CTX": 12288,
             "SUMMARIZING_NUM_CTX": 8192,
@@ -46,11 +46,11 @@ PROFILES: dict[str, dict] = {
     },
     "vram16": {
         "label": "16 GB de VRAM (ex.: RTX 4060 Ti 16 GB, RX 7800 XT)",
-        "note": "Rascunho com gemma3:12b, que escreve melhor que o llama3.1:8b, e contexto maior.",
+        "note": "gemma4:12b com contexto maior.",
         "values": {
-            "MODEL_DRAFTING": "gemma3:12b",
-            "MODEL_REFINING": "gemma3:12b",
-            "MODEL_SUMMARIZING": "llama3.1:8b",
+            "MODEL_DRAFTING": "gemma4:12b",
+            "MODEL_REFINING": "gemma4:12b",
+            "MODEL_SUMMARIZING": "gemma4:12b",
             "DRAFTING_NUM_CTX": 16384,
             "REFINING_NUM_CTX": 16384,
             "SUMMARIZING_NUM_CTX": 8192,
@@ -58,11 +58,11 @@ PROFILES: dict[str, dict] = {
     },
     "vram24": {
         "label": "24 GB de VRAM ou mais (ex.: RTX 3090, RTX 4090)",
-        "note": "Polimento com gemma3:27b.",
+        "note": "Rascunho e polimento com gemma4:31b, o melhor Gemma 4 em ficção longa.",
         "values": {
-            "MODEL_DRAFTING": "gemma3:12b",
-            "MODEL_REFINING": "gemma3:27b",
-            "MODEL_SUMMARIZING": "gemma3:12b",
+            "MODEL_DRAFTING": "gemma4:31b",
+            "MODEL_REFINING": "gemma4:31b",
+            "MODEL_SUMMARIZING": "gemma4:12b",
             "DRAFTING_NUM_CTX": 16384,
             "REFINING_NUM_CTX": 16384,
             "SUMMARIZING_NUM_CTX": 12288,
@@ -75,7 +75,7 @@ PROFILES: dict[str, dict] = {
         "note": "Precisa de chave de API da Anthropic, paga por uso. Não usa a placa de vídeo. "
                 "O texto da história é enviado para a Anthropic.",
         "values": {
-            "PROVIDER_DRAFTING": "anthropic", "MODEL_DRAFTING": "claude-sonnet-5",
+            "PROVIDER_DRAFTING": "anthropic", "MODEL_DRAFTING": "claude-opus-5",
             "PROVIDER_REFINING": "anthropic", "MODEL_REFINING": "claude-sonnet-5",
             "PROVIDER_SUMMARIZING": "anthropic", "MODEL_SUMMARIZING": "claude-haiku-4-5-20251001",
         },
@@ -86,9 +86,9 @@ PROFILES: dict[str, dict] = {
         "note": "Precisa de chave de API do Google AI Studio (tem cota grátis limitada). "
                 "O texto da história é enviado para o Google.",
         "values": {
-            "PROVIDER_DRAFTING": "google", "MODEL_DRAFTING": "gemini-2.5-pro",
-            "PROVIDER_REFINING": "google", "MODEL_REFINING": "gemini-2.5-flash",
-            "PROVIDER_SUMMARIZING": "google", "MODEL_SUMMARIZING": "gemini-2.5-flash",
+            "PROVIDER_DRAFTING": "google", "MODEL_DRAFTING": "gemini-3.8-flash",
+            "PROVIDER_REFINING": "google", "MODEL_REFINING": "gemini-3.8-flash",
+            "PROVIDER_SUMMARIZING": "google", "MODEL_SUMMARIZING": "gemini-3.1-flash-lite",
         },
     },
     "openai": {

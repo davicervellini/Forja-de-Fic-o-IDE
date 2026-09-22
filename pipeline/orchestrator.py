@@ -39,6 +39,7 @@ from pipeline.prompts import (
     scene_guidance,
 )
 from pipeline.akashic_schema import read_meta
+from pipeline.languages import chapter_heading, notes_language, notes_rule, story_language, story_rule
 from pipeline.premise import chapter_guidance
 from pipeline.premise import from_text as premise_from_text
 from pipeline.chapters import (
@@ -139,6 +140,9 @@ class PipelineOrchestrator:
         self.refining_num_ctx = refining_num_ctx or config.REFINING_NUM_CTX
         self.summarizing_num_ctx = summarizing_num_ctx or config.SUMMARIZING_NUM_CTX
         self.request_timeout = request_timeout or config.REQUEST_TIMEOUT
+        # História no idioma do projeto; o resto (resumos, memória, cenas planejadas, checagem) no do usuário.
+        self.story_rule = story_rule(story_language(project))
+        self.notes_rule = notes_rule(notes_language())
 
         self.drafting_extra = {"num_gpu": config.DRAFTING_NUM_GPU} if config.DRAFTING_NUM_GPU is not None else {}
         self.refining_extra = {"num_gpu": config.REFINING_NUM_GPU} if config.REFINING_NUM_GPU is not None else {}
@@ -167,7 +171,7 @@ class PipelineOrchestrator:
             model=self.model_drafting,
             provider=self.provider_drafting,
             system_prompt=SYSTEM_SCENE_PLANNER,
-            user_prompt=build_planner_prompt(premise, self.akashic_records),
+            user_prompt=f"{build_planner_prompt(premise, self.akashic_records)}\n\n{self.notes_rule}",
             temperature=0.3,
             num_ctx=self.drafting_num_ctx,
             timeout=self.request_timeout,
@@ -196,7 +200,7 @@ class PipelineOrchestrator:
             model=self.model_drafting,
             provider=self.provider_drafting,
             system_prompt=SYSTEM_DRAFTING,
-            user_prompt=user_prompt,
+            user_prompt=f"{user_prompt}\n\n{self.story_rule}",
             temperature=self.drafting_temperature,
             num_ctx=self.drafting_num_ctx,
             timeout=self.request_timeout,
@@ -212,6 +216,17 @@ class PipelineOrchestrator:
             return {}
         meta, _ = read_meta(path.read_text(encoding="utf-8"))
         return {c.name: c.sheet.strip() for c in meta.characters} if meta else {}
+
+    def _location_sheets(self) -> tuple[dict[str, str], list[str]]:
+        """(nome → ficha dos locais, nomes marcados "sempre no contexto"), dos metadados do Registro."""
+        path = self.project.akashic_path
+        if not path.exists():
+            return {}, []
+        meta, _ = read_meta(path.read_text(encoding="utf-8"))
+        if not meta:
+            return {}, []
+        sheets = {loc.name: loc.model_sheet.strip() for loc in meta.locations if loc.model_sheet.strip()}
+        return sheets, [loc.name for loc in meta.locations if loc.always and loc.model_sheet.strip()]
 
     def _protagonist_voice(self) -> str:
         """Ficha curta do(s) protagonista(s), lida dos metadados do Registro Akáshico."""
@@ -238,12 +253,13 @@ class PipelineOrchestrator:
         scenes = plan.scenes
         total = len(scenes)
         default_target = max(250, config.CHAPTER_TARGET_WORDS // total)
-        title = plan.title or f"Chapter {chapter_num}"
+        title = chapter_heading(plan.title, chapter_num, story_language(self.project))
         prev_tail = self._previous_chapter_tail(chapter_num)
         voice = self._protagonist_voice()
         # Premissa guiada: elenco do capítulo com as fichas, abertura e o que precisa ou não pode aparecer.
         form = premise_from_text(premise)
         sheets = self._character_sheets() if form.characters else {}
+        places, always_places = self._location_sheets()
         common: dict[str, Any] = dict(
             premise=premise,
             akashic_records=self.akashic_records,
@@ -278,7 +294,7 @@ class PipelineOrchestrator:
                 so_far = tail_words(chapter_text, config.CHAPTER_SO_FAR_TAIL_WORDS)
                 guidance = "\n".join(filter(None, [
                     scene_guidance(next_text, last_sentence(chapter_text or prev_tail), voice),
-                    chapter_guidance(form, sheets, first_scene=not chapter_text),
+                    chapter_guidance(form, sheets, first_scene=not chapter_text, places=places, always=always_places),
                 ]))
                 raw = self._generate_scene_text(
                     build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=target,
@@ -296,7 +312,7 @@ class PipelineOrchestrator:
                     callbacks.on_token("drafting", "\n\n")
                     guidance = "\n".join(filter(None, [
                         scene_guidance(next_text, last_sentence(text), voice),
-                        chapter_guidance(form, sheets, first_scene=False),
+                        chapter_guidance(form, sheets, first_scene=False, places=places, always=always_places),
                     ]))
                     raw = self._generate_scene_text(
                         build_scene_prompt(scene_num=i, scene_text=scene.text, target_words=missing,
@@ -346,7 +362,8 @@ class PipelineOrchestrator:
                     provider=self.provider_refining,
                     system_prompt=SYSTEM_REFINING,
                     user_prompt=build_refining_prompt(scene, style_block=style_block,
-                                                      scene_label=f"scene {i} of {total} of a chapter"),
+                                                      scene_label=f"scene {i} of {total} of a chapter")
+                    + f"\n\n{self.story_rule}",
                     temperature=self.refining_temperature,
                     num_ctx=self.refining_num_ctx,
                     timeout=self.request_timeout,
@@ -390,7 +407,7 @@ class PipelineOrchestrator:
             model=self.model_summarizing,
             provider=self.provider_summarizing,
             system_prompt=SYSTEM_SUMMARIZING,
-            user_prompt=user_prompt,
+            user_prompt=f"{user_prompt}\n\n{self.notes_rule}",
             temperature=self.summarizing_temperature,
             num_ctx=self.summarizing_num_ctx,
             timeout=self.request_timeout,
@@ -426,7 +443,7 @@ class PipelineOrchestrator:
             model=self.model_summarizing,
             provider=self.provider_summarizing,
             system_prompt=SYSTEM_UPDATING,
-            user_prompt=user_prompt,
+            user_prompt=f"{user_prompt}\n\n{self.notes_rule}",
             temperature=self.summarizing_temperature,
             num_ctx=self.summarizing_num_ctx,
             timeout=self.request_timeout,
@@ -463,7 +480,7 @@ class PipelineOrchestrator:
             model=self.model_summarizing,
             provider=self.provider_summarizing,
             system_prompt=SYSTEM_COMPRESS_MEMORY,
-            user_prompt=user_prompt,
+            user_prompt=f"{user_prompt}\n\n{self.notes_rule}",
             temperature=0.2,
             num_ctx=self.summarizing_num_ctx,
             timeout=self.request_timeout,
@@ -486,7 +503,7 @@ class PipelineOrchestrator:
             model=self.model_summarizing,
             provider=self.provider_summarizing,
             system_prompt=SYSTEM_MERGING,
-            user_prompt=user_prompt,
+            user_prompt=f"{user_prompt}\n\n{self.notes_rule}",
             temperature=self.summarizing_temperature,
             num_ctx=self.summarizing_num_ctx,
             timeout=self.request_timeout,
@@ -525,7 +542,7 @@ class PipelineOrchestrator:
                 model=self.model_summarizing,
                 provider=self.provider_summarizing,
                 system_prompt=SYSTEM_CONSISTENCY,
-                user_prompt=user_prompt,
+                user_prompt=f"{user_prompt}\n\n{self.notes_rule}",
                 temperature=0.1,
                 num_ctx=self.summarizing_num_ctx,
                 timeout=min(self.request_timeout, 180),
