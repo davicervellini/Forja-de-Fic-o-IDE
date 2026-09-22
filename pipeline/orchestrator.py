@@ -161,6 +161,23 @@ class PipelineOrchestrator:
         _, scenes = split_chapter(path.read_text(encoding="utf-8"))
         return tail_words("\n\n".join(scenes), config.PREVIOUS_CHAPTER_TAIL_WORDS)
 
+    def _next_chapter_opening(self, chapter_num: int) -> str:
+        """
+        Abertura da premissa do capítulo seguinte, se o usuário já escreveu. Sem o campo Abertura,
+        vale a primeira cena. Vazio quando não há premissa: a última cena termina no gancho.
+        """
+        path = self.project.chapter_dir(chapter_num + 1) / "premissa.md"
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            return ""
+        form = premise_from_text(text)
+        if form.opening.strip():
+            return form.opening.strip()
+        plan = parse_premise(text)
+        return plan.scenes[0].text.strip() if plan.scenes else ""
+
     def _plan_scenes(self, premise: str, chapter_num: int, callbacks: PipelineCallbacks):
         """Cenas da premissa. Sem cenas numeradas, o próprio modelo divide a premissa em cenas."""
         plan = parse_premise(premise)
@@ -255,6 +272,7 @@ class PipelineOrchestrator:
         default_target = max(250, config.CHAPTER_TARGET_WORDS // total)
         title = chapter_heading(plan.title, chapter_num, story_language(self.project))
         prev_tail = self._previous_chapter_tail(chapter_num)
+        next_opening = self._next_chapter_opening(chapter_num)
         voice = self._protagonist_voice()
         # Premissa guiada: elenco do capítulo com as fichas, abertura e o que precisa ou não pode aparecer.
         form = premise_from_text(premise)
@@ -272,6 +290,7 @@ class PipelineOrchestrator:
             character_roster=self.project.character_roster,
             open_threads=self.project.open_threads,
             previous_chapter_tail=prev_tail,
+            next_chapter_opening=next_opening,
         )
         # Sequências de palavras já usadas (inclusive no fim do capítulo anterior): frases que as
         # repetem são laço ou recomeço, e saem do texto.

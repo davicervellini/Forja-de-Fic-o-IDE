@@ -287,12 +287,15 @@ def build_scene_prompt(
     chapter_so_far: str = "",
     scene_so_far: str = "",
     guidance: str = "",
+    next_chapter_opening: str = "",
 ) -> str:
     """
     Prompt de UMA cena. A parte fixa (registro, memória, resumos, final do capítulo
     anterior, premissa) vem primeiro e é igual em todas as cenas do capítulo, para o
     Ollama reaproveitar o cache do prompt; o que muda (texto já escrito e tarefa) vem no fim.
     `scene_so_far` preenchido pede a continuação de uma cena que parou cedo demais.
+    `next_chapter_opening` é a abertura da premissa do capítulo seguinte, quando o usuário já
+    a escreveu: a última cena termina onde o próximo capítulo começa, sem escrever nada dele.
     """
     base = build_drafting_prompt(
         premise=premise,
@@ -336,6 +339,10 @@ def build_scene_prompt(
     if is_last:
         task.append(f"This is the last scene: end the chapter on this hook: {hook.strip()}" if hook.strip()
                     else "This is the last scene: end the chapter on a hook or a decision.")
+        if next_chapter_opening.strip():
+            task.append(f"The NEXT chapter (Chapter {chapter_num + 1}), which is NOT yours to write, opens like this: "
+                        f"{next_chapter_opening.strip()} End this chapter so that the next one can start exactly "
+                        "there: same place, same people, same situation. Do not write any of it.")
     else:
         task.append("Stop when this scene's beat is complete. Do not end the chapter.")
     if not scene_so_far.strip():

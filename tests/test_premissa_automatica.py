@@ -135,3 +135,33 @@ def test_premissa_em_ingles_e_traduzida_para_o_idioma_do_usuario(tmp_path):
     assert "Goal: Arthur explora a cidade." in text and "Chapter 2: The Next Day" in text
     # Nomes não passam pela tradução.
     assert "Characters in scene: Arthur Galhardo" in text
+
+
+def test_ultima_cena_le_a_abertura_da_proxima_premissa(tmp_path):
+    """Com a premissa do capítulo seguinte já escrita, a última cena termina onde ela começa."""
+    from pipeline.orchestrator import PipelineOrchestrator
+    from pipeline.project import StoryProject
+    proj = StoryProject.create(tmp_path, "p")
+    (proj.chapter_dir(2)).mkdir(parents=True, exist_ok=True)
+    (proj.chapter_dir(2) / "premissa.md").write_text(
+        "Chapter Premise: Chapter 2: Next\n\nOpening: Arthur wakes up on the cold floor of the gate room.\n\n"
+        "Scenes:\n1. He gets up. (about 300 words)", encoding="utf-8")
+    prompts_seen = []
+
+    def stub(model, system_prompt, user_prompt, **kw):
+        if system_prompt == prompts.SYSTEM_DRAFTING:
+            prompts_seen.append(user_prompt)
+            return " ".join(f"W{i}." for i in range(300))
+        if system_prompt == prompts.SYSTEM_UPDATING:
+            return "=== DYNAMIC MEMORY ===\nm\n=== CHARACTER ROSTER ===\nr\n=== OPEN THREADS ===\nt"
+        return "OK." if system_prompt == prompts.SYSTEM_CONSISTENCY else "text"
+
+    premise = "Chapter Premise: Chapter 1: One\n\nScenes:\n1. He falls. (about 300 words)\n2. He sleeps. (about 300 words)"
+    with patch.object(orch_mod, "generate_text", stub), patch.object(config, "UI_LANGUAGE", "en"):
+        result = PipelineOrchestrator(project=proj).run_single(premise, 1)
+    assert result.status == "done", result.error
+    first = [p for p in prompts_seen if "scene 1 of 2" in p]
+    last = [p for p in prompts_seen if "scene 2 of 2" in p]
+    assert first and last
+    assert "cold floor of the gate room" in last[0] and "NOT yours to write" in last[0]
+    assert all("The NEXT chapter" not in p for p in first)

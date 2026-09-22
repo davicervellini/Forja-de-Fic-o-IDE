@@ -82,7 +82,9 @@ cada cena, e parágrafos de narração muito longos são quebrados no fim de uma
 Quando um capítulo termina, o programa já escreve a premissa do seguinte, com o fim do
 capítulo fresco na memória. Essa premissa fica marcada com ✎ na lista e espera sua
 revisão: ajuste na aba **Premissa** e clique em **✔ Aprovar e gerar**. Até lá, ▶ Gerar tudo
-pula o capítulo. A opção fica em ⚙ Configurações.
+pula o capítulo. A opção fica em ⚙ Configurações. Premissa que já existe nunca é sobrescrita. Se a
+premissa do capítulo seguinte já estiver escrita, a última cena do capítulo lê a abertura
+dela e termina exatamente onde o próximo começa.
 
 O programa trabalha com dois idiomas. O **idioma da interface** (⚙ Configurações) vale
 para a tela e para tudo o que o programa escreve para você ler: resumos, memória, fichas
