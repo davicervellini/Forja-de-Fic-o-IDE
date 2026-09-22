@@ -81,3 +81,33 @@ def notes_rule(code: str) -> str:
     name = english_name(code)
     return (f"LANGUAGE: write your answer in {name}. Keep proper names, field labels and section headers "
             f"exactly as shown in English, and quote story text in its original language.")
+
+
+# Palavras curtas e frequentes de cada idioma, para adivinhar em que idioma o modelo respondeu.
+_STOPWORDS = {
+    "en": {"the", "and", "of", "to", "is", "his", "he", "with", "that", "for", "in", "a", "it", "as", "on", "her"},
+    "pt-BR": {"o", "a", "os", "as", "de", "do", "da", "que", "e", "um", "uma", "com", "para", "não", "no", "na", "ele", "ela"},
+    "es": {"el", "la", "los", "las", "de", "que", "y", "un", "una", "con", "para", "no", "en", "del", "se", "su"},
+    "fr": {"le", "la", "les", "de", "des", "et", "un", "une", "que", "avec", "pour", "dans", "il", "elle", "pas", "du"},
+    "de": {"der", "die", "das", "und", "ist", "nicht", "mit", "ein", "eine", "zu", "den", "er", "sie", "von", "auf"},
+    "it": {"il", "la", "le", "di", "che", "e", "un", "una", "con", "per", "non", "del", "della", "lui", "lei", "nel"},
+}
+
+
+def guess_language(text: str) -> str | None:
+    """Idioma mais provável do texto entre os que têm lista de palavras, ou None se o texto for curto demais."""
+    import re
+    words = re.findall(r"[a-zà-ÿ]+", (text or "").lower())
+    if len(words) < 20:
+        return None
+    scores = {code: sum(w in stop for w in words) for code, stop in _STOPWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 3 else None
+
+
+def wrong_language(text: str, code: str) -> bool:
+    """True quando dá para afirmar que o texto não está no idioma pedido."""
+    if code not in _STOPWORDS:
+        return False
+    guess = guess_language(text)
+    return guess is not None and guess != code

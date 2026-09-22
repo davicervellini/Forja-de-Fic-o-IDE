@@ -9,6 +9,7 @@ aquele capítulo pelo botão dele conta como aprovação).
 """
 
 import logging
+import re
 import threading
 from typing import Callable
 
@@ -17,6 +18,7 @@ from pipeline import chapters as ch
 from pipeline import premise as premise_mod
 from pipeline.api import generate_text
 from pipeline.io_utils import read_file
+from pipeline.languages import english_name, notes_language, wrong_language
 from pipeline.project import StoryProject
 
 logger = logging.getLogger(__name__)
@@ -62,10 +64,25 @@ def premise_context(project: StoryProject, num: int) -> dict:
     )
 
 
+SYSTEM_TRANSLATE = """\
+You translate planning notes of a web novel into {language}. Translate the user's text. Keep proper names, place \
+names, chapter titles and anything inside quotes or [System] lines exactly as written. Output only the translation."""
+
+# Campos da premissa que são texto corrido. Título, elenco, locais e "não pode aparecer" são nomes e ficam como estão.
+_PROSE_FIELDS = ("goal", "opening", "hook", "must_include")
+
+
 def ask_model(system: str, user: str, suggest: bool, cancel_event: threading.Event | None = None,
               on_token: Callable[[str], None] | None = None) -> str:
-    """Planejar a premissa pede o modelo mais capaz: o do polimento."""
-    return generate_text(
+    """
+    Planejar a premissa pede o modelo mais capaz: o do polimento. A resposta tem de vir no idioma
+    do usuário; modelos pequenos às vezes seguem o idioma do registro (inglês) e ignoram a linha
+    LANGUAGE, então a regra vai também no prompt de sistema e, se ainda assim a resposta vier no
+    idioma errado, ela passa por uma tradução que preserva o formato.
+    """
+    code = notes_language()
+    system = f"{system}\n\nWrite every field content in {english_name(code)}, even though the records are in another language."
+    raw = generate_text(
         model=config.MODEL_REFINING, provider=config.PROVIDER_REFINING,
         system_prompt=system, user_prompt=user,
         temperature=0.5 if suggest else 0.1,
@@ -74,6 +91,40 @@ def ask_model(system: str, user: str, suggest: bool, cancel_event: threading.Eve
         # Premissa tem ~500 palavras; o teto baixo corta o modelo que tenta escrever o capítulo.
         extra_options={"num_predict": 900, "stop": ["\n---"]},
     )
+    return to_user_language(raw, cancel_event)
+
+
+def to_user_language(text: str, cancel_event: threading.Event | None = None) -> str:
+    """
+    Traduz para o idioma do usuário o texto que veio em outro idioma. Nada muda se já estiver certo.
+    Uma premissa é traduzida campo por campo: com o texto inteiro de uma vez, modelos pequenos
+    devolvem o original, e por partes o formato não tem como quebrar.
+    """
+    code = notes_language()
+    if not wrong_language(text, code):
+        return text
+    logger.info(f"A resposta veio em outro idioma; traduzindo para {english_name(code)}.")
+    form = premise_mod.from_text(text)
+    if not form.scenes:
+        return _translate(text, code, cancel_event)
+    for attr in _PROSE_FIELDS:
+        value = getattr(form, attr)
+        if value.strip():
+            setattr(form, attr, _translate(value, code, cancel_event))
+    for scene in form.scenes:
+        scene["text"] = _translate(scene["text"], code, cancel_event)
+    m = re.search(r"Chapter\s+(\d+)", text)
+    return premise_mod.to_text(form, int(m.group(1)) if m else 1)
+
+
+def _translate(text: str, code: str, cancel_event: threading.Event | None) -> str:
+    out = generate_text(
+        model=config.MODEL_REFINING, provider=config.PROVIDER_REFINING,
+        system_prompt=SYSTEM_TRANSLATE.format(language=english_name(code)),
+        user_prompt=text, temperature=0.1, num_ctx=config.REFINING_NUM_CTX, cancel_event=cancel_event,
+        extra_options={"num_predict": max(300, len(text.split()) * 4)},
+    )
+    return out.strip() or text
 
 
 def clean_suggestion(raw: str, ctx: dict) -> tuple[premise_mod.PremiseForm, str, list[str]]:

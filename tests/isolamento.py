@@ -9,9 +9,9 @@ from pipeline import config
 
 
 def local_only():
-    """Todas as fases no Ollama, sem reserva local e sem premissa automática."""
+    """Todas as fases no Ollama, sem reserva local, sem premissa automática e com a interface em inglês."""
     return patch.multiple(
         config,
         PROVIDER_DRAFTING="ollama", PROVIDER_REFINING="ollama", PROVIDER_SUMMARIZING="ollama",
-        CLOUD_FALLBACK=False, AUTO_NEXT_PREMISE=False,
+        CLOUD_FALLBACK=False, AUTO_NEXT_PREMISE=False, UI_LANGUAGE="en",
     )

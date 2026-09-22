@@ -30,7 +30,7 @@ Must not appear: nobody else."""
 
 
 def _stub(model, system_prompt, user_prompt, **kw):
-    if system_prompt == P.SYSTEM_PREMISE_WRITER:
+    if system_prompt.startswith(P.SYSTEM_PREMISE_WRITER):
         return SUGGESTION
     if system_prompt == prompts.SYSTEM_DRAFTING:
         return " ".join(f"W{i}." for i in range(300))
@@ -45,7 +45,7 @@ def test_capitulo_pronto_gera_premissa_do_seguinte_esperando_aprovacao(tmp_path)
 
     (tmp_path / "projetos").mkdir()
     with patch.object(config, "PROJECTS_DIR", tmp_path / "projetos"), patch.object(config, "DATA_DIR", tmp_path), \
-            patch.object(config, "AUTO_NEXT_PREMISE", True), \
+            patch.object(config, "AUTO_NEXT_PREMISE", True), patch.object(config, "UI_LANGUAGE", "en"), \
             patch.object(config, "PROVIDER_DRAFTING", "ollama"), patch.object(config, "PROVIDER_REFINING", "ollama"), \
             patch.object(config, "PROVIDER_SUMMARIZING", "ollama"), \
             patch.object(srv, "check_ollama_health", lambda **kw: True), \
@@ -95,10 +95,43 @@ def test_gerar_um_capitulo_pelo_numero_aprova_a_premissa(tmp_path):
     from pipeline.project import StoryProject
     from pipeline import chapters as ch
     proj = StoryProject.create(tmp_path, "p")
-    with patch.object(premise_flow, "generate_text", _stub):
+    with patch.object(premise_flow, "generate_text", _stub), patch.object(config, "UI_LANGUAGE", "en"):
         done = premise_flow.auto_next_premise(proj, 1)
     assert done == {"chapter": 2, "ok": True, "removed": []}
     assert premise_flow.pending_approval(proj, 2)
     premise_flow.approve(proj, 2)
     assert not premise_flow.pending_approval(proj, 2)
     assert ch.read_info(proj, 2)["premise_auto"] is True
+
+
+def test_premissa_em_ingles_e_traduzida_para_o_idioma_do_usuario(tmp_path):
+    """Modelo pequeno segue o idioma do registro: a premissa volta traduzida campo por campo, com o formato intacto."""
+    from pipeline.project import StoryProject
+    proj = StoryProject.create(tmp_path, "p")
+    seen = []
+    pieces = {
+        "Arthur explores the city.": "Arthur explora a cidade.",
+        "He wakes where chapter 1 ended.": "Ele acorda onde o capítulo 1 terminou.",
+        "He wakes up.": "Ele acorda.",
+        "He walks out.": "Ele sai para o corredor.",
+        "A door opens.": "Uma porta se abre.",
+        "the cold.": "o frio.",
+    }
+
+    def stub(model, system_prompt, user_prompt, **kw):
+        seen.append(user_prompt)
+        if system_prompt.startswith(P.SYSTEM_PREMISE_WRITER):
+            assert "Brazilian Portuguese" in system_prompt
+            return SUGGESTION
+        assert system_prompt.startswith("You translate") and "Brazilian Portuguese" in system_prompt
+        return pieces[user_prompt.strip()]
+
+    with patch.object(premise_flow, "generate_text", stub), patch.object(config, "UI_LANGUAGE", "pt-BR"):
+        done = premise_flow.auto_next_premise(proj, 1)
+    # Um pedido para a premissa e um por campo de texto corrido: objetivo, abertura, gancho, "precisa aparecer" e 2 cenas.
+    assert done["ok"] and len(seen) == 7
+    text = (proj.chapter_dir(2) / "premissa.md").read_text(encoding="utf-8")
+    assert "Ele sai para o corredor. (about 300 words)" in text
+    assert "Goal: Arthur explora a cidade." in text and "Chapter 2: The Next Day" in text
+    # Nomes não passam pela tradução.
+    assert "Characters in scene: Arthur Galhardo" in text

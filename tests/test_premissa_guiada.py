@@ -124,10 +124,10 @@ def test_api_formulario_sugestao_e_conferencia(tmp_path):
     suggestion = P.to_text(FORM, 1)
 
     def fake_generate(model, system_prompt, user_prompt, **kw):
-        if system_prompt == P.SYSTEM_PREMISE_WRITER:
+        if system_prompt.startswith(P.SYSTEM_PREMISE_WRITER):
             assert "Write the premise of Chapter 1" in user_prompt and "more action" in user_prompt
             return suggestion
-        assert system_prompt == P.SYSTEM_PREMISE_CHECKER
+        assert system_prompt.startswith(P.SYSTEM_PREMISE_CHECKER)
         return "- A abertura contradiz o capítulo anterior."
 
     with local_only(), patch.object(config, "PROJECTS_DIR", root), patch.object(config, "DATA_DIR", tmp_path), \
