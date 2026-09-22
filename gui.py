@@ -12,6 +12,9 @@ from tkinter import filedialog, messagebox
 
 import customtkinter
 
+from gui_akashic import AkashicEditor, AkashicWizard
+from pipeline.akashic import build_registro_modelo
+from pipeline.akashic_builder import build_akashic
 from pipeline.api import check_ollama_health
 from pipeline.config import (
     PROJECTS_DIR,
@@ -130,9 +133,15 @@ class WikiImportDialog(customtkinter.CTkToplevel):
         frame.grid(row=3, column=0, padx=18, pady=8, sticky="ew")
         frame.grid_columnconfigure(1, weight=1)
         customtkinter.CTkLabel(frame, text="Franquia", text_color=TEXT_DIM).grid(row=0, column=0, padx=(0, 8), sticky="e")
-        from pipeline.wiki_fetcher import WIKI_DOMAINS
-        self.franchise_cb = customtkinter.CTkComboBox(frame, values=list(WIKI_DOMAINS.keys()), fg_color=BG_CARD, border_color=BORDER)
+        from pipeline.wiki_fetcher import WIKI_DOMAINS, project_universes
+        # Universos do Registro Akáshico do projeto; sem Akáshico v2, cai no dicionário antigo.
+        self._universes = {(u["name"] if u["active"] else f"{u['name']} (reserva)"): u["name"] for u in project_universes(project.project_dir)}
+        values = list(self._universes) or list(WIKI_DOMAINS.keys())
+        self.franchise_cb = customtkinter.CTkComboBox(frame, values=values, fg_color=BG_CARD, border_color=BORDER)
+        self.franchise_cb.set(values[0])
         self.franchise_cb.grid(row=0, column=1, sticky="ew")
+        if not self._universes:
+            customtkinter.CTkLabel(frame, text="Sem universos no Akáshico: usando a lista padrão. Abra 📜 Akáshico para cadastrar.", text_color=TEXT_DIM, font=customtkinter.CTkFont(size=10)).grid(row=1, column=0, columnspan=2, pady=(4, 0), sticky="w")
         self.status_lbl = customtkinter.CTkLabel(self, text="Pronto.", anchor="w", text_color=TEXT_DIM)
         self.status_lbl.grid(row=4, column=0, padx=18, pady=(4, 2), sticky="ew")
         self.progress = customtkinter.CTkProgressBar(self, progress_color=ACCENT)
@@ -177,7 +186,8 @@ class WikiImportDialog(customtkinter.CTkToplevel):
         self.progress.set(0)
         self.status_lbl.configure(text=f"Fila: {len(names)} personagem(ns)", text_color=ACCENT_AMBER)
         self._append_log(f"Iniciando fila com {len(names)} personagem(ns)...")
-        franchise = self.franchise_cb.get()
+        label = self.franchise_cb.get()
+        franchise = self._universes.get(label, label)  # tira o sufixo "(reserva)" do rótulo
         threading.Thread(target=self._worker_queue, args=(names, franchise), daemon=True).start()
 
     def _cancel_queue(self):
@@ -248,7 +258,7 @@ class EditorScreen(customtkinter.CTkFrame):
         customtkinter.CTkLabel(bar, text=f"⚒  {self.project.name}", font=customtkinter.CTkFont(size=15, weight="bold"), text_color=TEXT).grid(row=0, column=1, sticky="w", padx=4)
         actions = customtkinter.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=0, column=2, padx=12, pady=6)
-        customtkinter.CTkButton(actions, text="📜 Akáshico", command=self._import_akashic, width=100, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).pack(side="left", padx=3)
+        customtkinter.CTkButton(actions, text="📜 Akáshico", command=self._open_akashic_editor, width=100, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).pack(side="left", padx=3)
         customtkinter.CTkButton(actions, text="🌐 Wiki", command=lambda: WikiImportDialog(self, self.project), width=80, height=28, fg_color=BG_CARD, hover_color=BG_HOVER, font=customtkinter.CTkFont(size=12)).pack(side="left", padx=3)
         self.btn_start = customtkinter.CTkButton(actions, text="▶  Run", command=self.start_pipeline, width=90, height=28, fg_color=ACCENT_GREEN, hover_color="#059669", font=customtkinter.CTkFont(size=12, weight="bold"))
         self.btn_start.pack(side="left", padx=3)
@@ -336,6 +346,14 @@ class EditorScreen(customtkinter.CTkFrame):
         if self.queue_items:
             self._refresh_queue_list()
             self._select_queue_item(len(self.queue_items) - 1)
+
+    def _open_akashic_editor(self):
+        """Tela de edição do Registro Akáshico (universos, personagens, texto). Importar arquivo fica dentro dela."""
+        def saved(ok):
+            has = self.project.akashic_path.exists()
+            self.akashic_lbl.configure(text="● Registro Akáshico OK" if has and ok else "○ Sem Registro Akáshico",
+                                       text_color=ACCENT_GREEN if has and ok else ACCENT_RED)
+        AkashicEditor(self, self.project, on_saved=saved)
 
     def _import_akashic(self):
         path = filedialog.askopenfilename(filetypes=[("Markdown", "*.md *.txt"), ("Todos", "*.*")])
@@ -574,8 +592,21 @@ class LauncherScreen(customtkinter.CTkFrame):
         name = dialog.get_input()
         if not name:
             return
+        # Projeto novo abre o assistente do Registro Akáshico (árvore de escolhas). O projeto só é criado
+        # ao concluir o assistente ou ao pular (projeto vazio); fechar a janela também pula.
+        AkashicWizard(
+            self.winfo_toplevel(), name,
+            on_done=lambda answers: self._create_project(name, answers),
+            on_skip=lambda: self._create_project(name, None),
+        )
+
+    def _create_project(self, name, answers):
         try:
             proj = StoryProject.create(PROJECTS_DIR, name)
+            if answers:
+                write_file(proj.akashic_path, build_akashic(answers))
+                ok, msg = build_registro_modelo(proj.project_dir)
+                logger.info("Registro Akáshico do projeto novo: %s", msg)
             self._open(proj.project_dir)
         except Exception as e:
             messagebox.showerror("Erro", str(e))

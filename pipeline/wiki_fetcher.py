@@ -40,11 +40,38 @@ WIKI_DOMAINS = {
 }
 
 
-def search_fandom_wiki(character_name: str, franchise: str) -> str | None:
+def project_universes(project_dir: str | Path) -> list[dict]:
+    """
+    Universos do Registro Akáshico do projeto que têm wiki: [{name, wiki, active}].
+    Universos ativos vêm primeiro; os de reserva (cadastrados, fora da história) depois.
+    Lista vazia se o arquivo não existe ou ainda está no formato antigo (v1).
+    """
+    from pipeline.akashic_schema import read_meta
+
+    path = Path(project_dir) / "registro_akashico.md"
+    if not path.exists():
+        return []
+    meta, _ = read_meta(read_file(path))
+    if meta is None:
+        return []
+    found = [{"name": u.name, "wiki": u.wiki, "active": u.active} for u in meta.universes if u.wiki]
+    return sorted(found, key=lambda u: not u["active"])
+
+
+def resolve_wiki_domain(franchise: str, project_dir: str | Path | None = None) -> str | None:
+    """Subdomínio da wiki: primeiro o universo cadastrado no Akáshico do projeto, depois o dicionário antigo."""
+    if project_dir:
+        for u in project_universes(project_dir):
+            if u["name"] == franchise:
+                return u["wiki"]
+    return WIKI_DOMAINS.get(franchise)
+
+
+def search_fandom_wiki(character_name: str, franchise: str, project_dir: str | Path | None = None) -> str | None:
     """Busca o wikitexto do personagem na API do Fandom."""
-    domain = WIKI_DOMAINS.get(franchise)
+    domain = resolve_wiki_domain(franchise, project_dir)
     if not domain:
-        raise ValueError(f"Franquia '{franchise}' não suportada para busca Wiki.")
+        raise ValueError(f"Universo '{franchise}' sem wiki cadastrada. Informe o subdomínio na tela do Registro Akáshico.")
 
     url = f"https://{domain}.fandom.com/api.php"
 
@@ -133,7 +160,7 @@ def add_character_to_memory(character_name: str, franchise: str, project_dir: st
     if character_name.lower() in current_memory.lower():
         return f"Personagem '{character_name}' já parece estar na Memória Dinâmica (ignorado)."
 
-    wikitext = search_fandom_wiki(character_name, franchise)
+    wikitext = search_fandom_wiki(character_name, franchise, project_dir)
     if not wikitext:
         return f"Personagem '{character_name}' não encontrado na Wiki de {franchise}."
 
