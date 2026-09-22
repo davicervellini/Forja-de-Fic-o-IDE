@@ -197,7 +197,6 @@
   "Idade": "Age",
   "Universo de origem": "Home universe",
   "Rótulo na lista do modelo (opcional)": "Label in the model list (optional)",
-  "Ficha para o modelo, em inglês": "Sheet for the model",
   "Ficha para o modelo": "Sheet for the model",
   "É o que o modelo lê sobre o personagem em todo capítulo (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar.": "This is what the model reads about the character in every chapter (section 5.8). One short paragraph: looks, personality, powers and way of speaking.",
   "É o que o modelo lê sobre o personagem em todo capítulo (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar. A ficha do protagonista também vai no fim de cada cena, para segurar a voz dele.": "This is what the model reads about the character in every chapter (section 5.8). One short paragraph: looks, personality, powers and way of speaking. The protagonist's sheet also goes at the end of each scene to hold their voice.",
@@ -410,5 +409,10 @@
   "Escrever a premissa do próximo capítulo quando um capítulo terminar (fica esperando sua aprovação)": "Write the next chapter's premise when a chapter finishes (it waits for your approval)",
   "Capítulo {x} — Escrevendo a premissa para você revisar": "Chapter {x} — Writing the premise for you to review",
   "O capítulo {x} está pronto, mas a premissa do seguinte falhou: {x}": "Chapter {x} is done, but the next premise failed: {x}",
-  "A premissa do capítulo {x} foi sugerida pelo programa e espera sua aprovação. Revise na aba Premissa e clique em ✔ Aprovar e gerar.": "The premise for chapter {x} was suggested by the program and waits for your approval. Review it in the Premise tab and click ✔ Approve and generate."
+  "A premissa do capítulo {x} foi sugerida pelo programa e espera sua aprovação. Revise na aba Premissa e clique em ✔ Aprovar e gerar.": "The premise for chapter {x} was suggested by the program and waits for your approval. Review it in the Premise tab and click ✔ Approve and generate.",
+  "Um parágrafo: origem, aparência, personalidade, poderes, jeito de falar.": "One paragraph: origin, look, personality, powers, how they speak.",
+  "Planta: onde ficam as áreas principais, níveis, entradas. O que existe ali. Estado na época da história. Never: o que não existe ali.": "Layout: where the main areas are, levels, entrances. What is there. State at the story's time. Never: what is not there.",
+  "O que existe aqui, o que nunca aparece, tom.": "What exists here, what never appears, tone.",
+  "Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo escreve a ficha no seu idioma.": "For each name, the program fetches the Fandom wiki page and the summary model writes the sheet in your language.",
+  "Para cada local, o programa busca a página na wiki (primeiro pelo nome exato), o modelo da fase de resumo escreve a ficha com a planta, o que existe ali e o que nunca existe, e a página sugere os sublocais para importar depois. Ex.: Atlantis, Chair room, Gate Room.": "For each place, the program fetches the wiki page (exact name first), the summary model writes the sheet with the layout, what is there and what never is, and the page suggests sub-places to import later. E.g.: Atlantis, Chair room, Gate Room."
 }

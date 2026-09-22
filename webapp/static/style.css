@@ -234,7 +234,8 @@ dialog.wide { width: min(900px, 94vw); }
 .key-row .key-msg { grid-column: 2 / -1; font-size: 12px; }
 
 /* ── Personagens e universos ── */
-.cast-layout { display: grid; grid-template-columns: 260px 1fr; gap: 18px; align-items: start; }
+/* minmax(0, 1fr): sem isso, texto longo ou muitas imagens alargam a coluna e a tela ganha rolagem lateral. */
+.cast-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 18px; align-items: start; }
 .cast-side { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; }
 .cast-list { list-style: none; margin: 0; padding: 0; max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); }
 .cast-list li { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
@@ -245,7 +246,8 @@ dialog.wide { width: min(900px, 94vw); }
 .cast-name { font-weight: 600; }
 .cast-meta { font-size: 12px; color: var(--muted); }
 .cast-meta .warn { color: var(--amber); }
-.cast-form { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.cast-form { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; min-width: 0; }
+.cast-form input, .cast-form select, .cast-form textarea { max-width: 100%; box-sizing: border-box; }
 .cast-form .row-actions { display: flex; gap: 8px; margin-top: 6px; }
 .cast-form textarea.sheet { min-height: 150px; font: 14px/1.55 var(--serif); }
 .cast-form textarea.notes { min-height: 90px; }
@@ -260,7 +262,7 @@ dialog.wide { width: min(900px, 94vw); }
 /* ── Importação da Wiki ── */
 .wiki-box { border: 1px solid #2c4263; background: #172231; border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px; }
 .wiki-box h3 { margin: 0 0 4px; }
-.wiki-row { border-top: 1px solid #2c4263; padding: 10px 0; display: grid; grid-template-columns: 24px 220px 1fr; gap: 10px; align-items: start; }
+.wiki-row { border-top: 1px solid #2c4263; padding: 10px 0; display: grid; grid-template-columns: 24px 220px minmax(0, 1fr); gap: 10px; align-items: start; }
 .wiki-row input[type=checkbox] { width: auto; margin-top: 8px; }
 .wiki-row textarea { min-height: 90px; font: 14px/1.5 var(--serif); }
 .wiki-row .wiki-info { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
@@ -277,7 +279,7 @@ dialog.wide { width: min(900px, 94vw); }
 .plan-box { border-left: 3px solid var(--accent); background: rgba(217, 164, 65, 0.07); padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
 .chip.toggle.on { background: rgba(217, 164, 65, 0.18); border-color: var(--accent); color: var(--text); }
 .chip.add { border-style: dashed; color: var(--muted); }
-.scene-row { display: grid; grid-template-columns: 22px 1fr 110px; gap: 8px; margin-bottom: 8px; align-items: start; }
+.scene-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 110px; gap: 8px; margin-bottom: 8px; align-items: start; }
 .scene-row .scene-num { color: var(--muted); padding-top: 8px; text-align: right; }
 .scene-row textarea { min-height: 74px; }
 .scene-side { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -288,8 +290,12 @@ dialog.wide { width: min(900px, 94vw); }
 .check-box ul { margin: 6px 0 0; padding-left: 18px; }
 
 /* ── Locais ── */
-.img-strip { display: flex; gap: 8px; overflow-x: auto; margin: 10px 0 4px; }
-.img-strip img { height: 110px; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
+/* As imagens quebram em linhas dentro da largura do painel; muitas imagens rolam para baixo, nunca para o lado. */
+.img-strip { display: flex; flex-wrap: wrap; gap: 8px; max-height: 250px; overflow-y: auto; overflow-x: hidden; margin: 10px 0 4px; }
+.img-strip img { height: 110px; max-width: 100%; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; object-fit: cover; }
 .wiki-subs { margin-top: 8px; }
 .wiki-subs .chips { max-height: 120px; overflow: auto; }
 .wiki-row select { width: auto; max-width: 100%; padding: 3px 6px; font-size: 12px; }
+
+/* URLs e nomes longos quebram em vez de alargar o painel. */
+.cast-form code, .cast-form .muted { overflow-wrap: anywhere; }

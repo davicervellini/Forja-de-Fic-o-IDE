@@ -834,7 +834,7 @@ function renderCastForm() {
         ${select("Universo de origem", "universe", it.universe, unis)}
         ${field("Rótulo na lista do modelo (opcional)", "sheet_label", it.sheet_label, "input", 'placeholder="ex.: Tinaia, the central AI."')}
       </div>
-      ${field(`Ficha para o modelo, em inglês <span class="muted" data-count></span>`, "sheet", it.sheet, "textarea", 'class="sheet" placeholder="One paragraph: origin, look, personality, powers, how they speak."')}
+      ${field(`Ficha para o modelo <span class="muted" data-count></span>`, "sheet", it.sheet, "textarea", 'class="sheet" placeholder="Um parágrafo: origem, aparência, personalidade, poderes, jeito de falar."')}
       <p class="muted">É o que o modelo lê sobre o personagem em todo capítulo (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar.${it.role === "protagonist" ? " A ficha do protagonista também vai no fim de cada cena, para segurar a voz dele." : ""}</p>
       ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
       <div class="muted">Aparece nos capítulos:</div>
@@ -855,7 +855,7 @@ function renderCastForm() {
         ${select("Fica dentro de", "parent", it.parent, parents)}
       </div>
       <label class="check"><input type="checkbox" data-f="always" ${it.always ? "checked" : ""}> Sempre no contexto (a ficha vai em toda cena, não só quando o local está na premissa)</label>
-      ${field(`Ficha para o modelo, em inglês <span class="muted" data-count></span>`, "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="Layout: where the main areas are, levels, entrances. What is there. State at the story\'s time. Never: what is not there."')}
+      ${field(`Ficha para o modelo <span class="muted" data-count></span>`, "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="Planta: onde ficam as áreas principais, níveis, entradas. O que existe ali. Estado na época da história. Never: o que não existe ali."')}
       <p class="muted">Vai para o prompt de cada cena quando o local está em "Locais em cena" na premissa (ou sempre, se marcado). Termine com uma frase "Never: …" com o que não existe ali, para o modelo não inventar.</p>
       ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
       ${it.url ? `<div class="muted">Wiki: <code>${esc(it.url)}</code></div>` : ""}
@@ -875,7 +875,7 @@ function renderCastForm() {
         ${field("Wiki do Fandom (subdomínio, ex.: stargate)", "wiki", it.wiki)}
       </div>
       <label class="check"><input type="checkbox" data-f="active" ${it.active ? "checked" : ""}> Faz parte da história (desmarcado = reserva, fora da lista fechada que o modelo recebe)</label>
-      ${field("Ficha para o modelo, em inglês", "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="What exists here, what never appears, tone."')}
+      ${field("Ficha para o modelo", "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="O que existe aqui, o que nunca aparece, tom."')}
       ${field("Personagens permitidos deste universo (separados por vírgula)", "allowed_characters", (it.allowed_characters || []).join(", "))}
       ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
       <div class="row-actions">
@@ -1034,7 +1034,7 @@ async function openWikiDialog(names = [], universe = null, kind = null, parent =
   const opts = unis.map(u => `<option value="${esc(u.name)}" ${u.name === universe ? "selected" : ""}>${esc(u.name)}${u.active ? "" : " (reserva)"} · ${esc(u.wiki)}.fandom.com</option>`).join("");
   const hint = kind === "location"
     ? "Para cada local, o programa busca a página na wiki (primeiro pelo nome exato), o modelo da fase de resumo escreve a ficha com a planta, o que existe ali e o que nunca existe, e a página sugere os sublocais para importar depois. Ex.: Atlantis, Chair room, Gate Room."
-    : "Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo escreve a ficha em inglês.";
+    : "Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo escreve a ficha no seu idioma.";
   const r = await openDialog({
     title: `Importar ${what} da Wiki`,
     body: `<label>Universo<select id="wk-universe">${opts}</select></label>
