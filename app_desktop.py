@@ -5,7 +5,8 @@ A API (webapp/server.py) roda num servidor local em 127.0.0.1, numa porta livre,
 janela usa o WebView2 do Windows. Nada fica exposto na rede.
 
 Uso:
-    python app_desktop.py            # janela do programa
+    python app_desktop.py            # janela do programa, com console para ver o log
+    pythonw app_desktop.py           # janela do programa, sem console (o atalho usa este)
     python app_desktop.py --browser  # abre no navegador padrão (desenvolvimento)
 """
 
@@ -53,6 +54,34 @@ def start_server(jobs: JobManager) -> tuple[uvicorn.Server, str]:
             raise RuntimeError("O servidor local não iniciou.")
         time.sleep(0.05)
     return server, f"http://{HOST}:{port}/"
+
+
+ICON = Path(__file__).resolve().parent / "webapp" / "static" / "forja.ico"
+
+
+def windows_app_id():
+    """Sem isto o Windows agrupa a janela com o Python e mostra o ícone dele na barra de tarefas."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ForjaDeFiccao.App")
+
+
+def set_window_icon(title: str):
+    """O pywebview no Windows não aceita ícone próprio: troca pelo da Forja depois que a janela abre."""
+    if sys.platform != "win32" or not ICON.exists():
+        return
+    import ctypes
+    user32 = ctypes.windll.user32
+    user32.FindWindowW.restype = ctypes.c_void_p
+    user32.LoadImageW.restype = ctypes.c_void_p
+    user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        return
+    for which, size in ((1, 48), (0, 16)):  # ICON_BIG, ICON_SMALL
+        hicon = user32.LoadImageW(None, str(ICON), 1, size, size, 0x10)  # IMAGE_ICON, LR_LOADFROMFILE
+        if hicon:
+            user32.SendMessageW(hwnd, 0x80, which, hicon)  # WM_SETICON
 
 
 class DesktopApi:
@@ -110,6 +139,7 @@ def main():
             pass
     else:
         import webview
+        windows_app_id()
         api = DesktopApi()
         window = webview.create_window(
             "Forja de Ficção", url, js_api=api, width=1360, height=880, min_size=(980, 640),
@@ -127,6 +157,7 @@ def main():
 
         if window is not None:
             window.events.closing += on_closing
+            window.events.shown += lambda: set_window_icon("Forja de Ficção")
         webview.start(private_mode=False, storage_path=str(config.DATA_DIR / "webview"))
 
     if jobs.busy:
@@ -137,5 +168,24 @@ def main():
     os._exit(0)
 
 
+def show_fatal(message: str):
+    """Sem console (pythonw), um erro na abertura sumiria calado: mostra numa caixa do Windows."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, "Forja de Ficção", 0x10)
+    else:
+        print(message, file=sys.stderr)
+
+
+def run():
+    try:
+        main()
+    except Exception as e:
+        logger.exception("A Forja de Ficção não conseguiu abrir.")
+        from pipeline.logsetup import log_file
+        show_fatal(f"A Forja de Ficção não conseguiu abrir:\n\n{e}\n\nDetalhes no log:\n{log_file()}")
+        os._exit(1)
+
+
 if __name__ == "__main__":
-    main()
+    run()

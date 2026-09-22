@@ -38,6 +38,15 @@ ollama serve
 
 ### Interface nova (janela web, em construção)
 
+Para abrir sem a janela preta do console, use o atalho **Forja de Ficção** da área de
+trabalho, dê dois cliques em `Abrir Forja.pyw` ou rode `pythonw app_desktop.py`. Sem
+console, o log fica em `logs/forja.log`, e um erro na abertura aparece numa caixa de aviso.
+
+O atalho aponta para `launcher/Forja de Ficção.exe`, uma cópia do `pythonw.exe` com o ícone
+da Forja, para a barra de tarefas e os docks mostrarem o ícone certo em vez do Python. Ele é
+gerado por `python tools/make_launcher.py` (a pasta fica fora do git); rode de novo depois
+de atualizar o Python.
+
 ```powershell
 python app_desktop.py            # janela própria (WebView2)
 python app_desktop.py --browser  # abre no navegador padrão

@@ -26,7 +26,9 @@ def setup_logging(level: int = logging.INFO) -> Path | None:
     """Configura console e arquivo. Retorna o caminho do log, ou None se não deu para criar o arquivo."""
     root = logging.getLogger()
     root.setLevel(level)
-    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root.handlers):
+    # Aberto pelo pythonw (sem console) o sys.stderr é None: aí só o arquivo de log vale.
+    if sys.stderr is not None and not any(
+            isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root.handlers):
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
         root.addHandler(console)

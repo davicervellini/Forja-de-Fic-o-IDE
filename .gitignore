@@ -48,3 +48,4 @@ credenciais.json
 logs/
 # Dados do navegador embutido (pywebview) em modo desenvolvimento
 webview/
+launcher/
