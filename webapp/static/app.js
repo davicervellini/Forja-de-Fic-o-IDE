@@ -16,7 +16,11 @@ const S = {
   job: null,          // trabalho em andamento (do servidor)
   liveChapter: null,
   lastSeq: 0,
-  liveText: "",       // texto ao vivo do capítulo em geração, mesmo com outra tela aberta
+  liveText: "",
+  cast: null,         // personagens e universos em edição
+  castTab: "characters",
+  castSel: 0,
+  castDirty: false,       // texto ao vivo do capítulo em geração, mesmo com outra tela aberta
 };
 
 async function api(method, path, body) {
@@ -168,7 +172,7 @@ function applyBusy() {
   const busyHere = projectBusy();
   const anyBusy = !!S.job;
   ["#btn-add-chapter", "#btn-redo", "#btn-delete-chapter", "#btn-edit-final", "#btn-save-final",
-   "#btn-save-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-save-akashic"].forEach(sel => {
+   "#btn-save-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-save-akashic", "#btn-save-cast"].forEach(sel => {
     const el = $(sel);
     if (el) el.disabled = busyHere;
   });
@@ -264,9 +268,11 @@ function showView(name) {
 }
 
 async function leaveEditing() {
-  if (!S.editing && !premiseDirty()) return true;
-  const ok = await confirmDlg("Alterações não salvas", "<p>Há alterações não salvas neste capítulo. Descartar?</p>", "Descartar", true);
-  if (ok) setEditing(false);
+  const castDirty = S.panel === "cast" && S.castDirty;
+  if (!S.editing && !premiseDirty() && !castDirty) return true;
+  const where = castDirty ? "nos personagens e universos" : "neste capítulo";
+  const ok = await confirmDlg("Alterações não salvas", `<p>Há alterações não salvas ${where}. Descartar?</p>`, "Descartar", true);
+  if (ok) { setEditing(false); markCastDirty(false); }
   return ok;
 }
 
@@ -377,7 +383,7 @@ function renderChapterList() {
 
 function showPanel(name) {
   S.panel = name;
-  ["chapter", "story", "akashic", "export", "empty"].forEach(p => $(`#panel-${p}`).classList.toggle("hidden", p !== name));
+  ["chapter", "cast", "story", "akashic", "export", "empty"].forEach(p => $(`#panel-${p}`).classList.toggle("hidden", p !== name));
   $$(".side-footer .link").forEach(b => b.classList.toggle("active", b.dataset.panel === name));
   if (S.project) renderChapterList();
 }
@@ -614,7 +620,9 @@ async function openPanel(name) {
   if (!(await leaveEditing())) return;
   S.current = null;
   showPanel(name);
-  if (name === "story") {
+  if (name === "cast") {
+    await loadCast();
+  } else if (name === "story") {
     await refreshProject();
     $$("[data-state]").forEach(t => { t.value = S.project.state[t.dataset.state] || ""; });
     const box = $("#summaries");
@@ -676,6 +684,216 @@ async function exportBook() {
     $("#export-msg").innerHTML = `${res.chapters} capítulo(s) exportado(s) para <code>${esc(res.path)}</code> <button class="link" id="btn-reveal">Abrir pasta</button>`;
     $("#btn-reveal").onclick = () => desktop.reveal(res.path);
     toast("Livro exportado.");
+  } catch (e) { fail(e); }
+}
+
+// ── Personagens e universos ─────────────────────────────────
+
+function markCastDirty(on = true) {
+  S.castDirty = on;
+  $("#cast-dirty").textContent = on ? "alterações não salvas" : "";
+}
+
+async function loadCast() {
+  try { S.cast = await api("GET", `/api/projects/${S.slug}/cast`); } catch (e) { return fail(e); }
+  S.castSel = 0;
+  markCastDirty(false);
+  renderCast();
+}
+
+function castItems() {
+  return S.castTab === "universes" ? S.cast.universes : S.cast.characters;
+}
+
+function renderCast() {
+  const c = S.cast;
+  const v1 = $("#cast-v1");
+  if (c.format !== "v2") {
+    v1.innerHTML = c.format === "none"
+      ? "Este projeto ainda não tem Registro Akáshico. Importe um em <b>Registro Akáshico</b> ou crie pelo assistente da versão antiga."
+      : 'O Registro Akáshico está no formato antigo (v1): personagens e universos ainda não foram lidos do texto. <button id="btn-cast-migrate">Converter para v2</button>';
+    v1.classList.remove("hidden");
+    const b = $("#btn-cast-migrate");
+    if (b) b.onclick = migrateCast;
+  } else {
+    v1.classList.add("hidden");
+  }
+  const editable = c.format === "v2";
+  $("#btn-save-cast").disabled = !editable || projectBusy();
+  $("#btn-cast-add").disabled = !editable;
+  $$("#cast-tabs button").forEach(b => b.classList.toggle("active", b.dataset.ctab === S.castTab));
+  renderCastList();
+  renderCastForm();
+  renderRosterMissing();
+}
+
+function renderCastList() {
+  const ul = $("#cast-items");
+  const items = castItems();
+  ul.innerHTML = "";
+  if (!items.length) { ul.innerHTML = '<li class="muted" style="cursor:default">Nenhum ainda.</li>'; return; }
+  items.forEach((it, i) => {
+    const li = document.createElement("li");
+    li.className = (i === S.castSel ? "active " : "") + (S.castTab === "universes" && !it.active ? "inactive" : "");
+    let meta;
+    if (S.castTab === "universes") {
+      meta = `${esc(S.cast.universe_roles[it.role] || it.role).split(" (")[0]} · ${it.active ? "na história" : "reserva"}${it.active && !it.model_sheet.trim() ? ' · <span class="warn">sem ficha</span>' : ""}`;
+    } else {
+      const seen = (S.cast.appearances[it.name] || []).length;
+      meta = `${esc(S.cast.character_roles[it.role] || it.role)}${it.sheet.trim() ? "" : ' · <span class="warn">sem ficha</span>'}${seen ? ` · ${seen} cap.` : ""}`;
+    }
+    li.innerHTML = `<span class="cast-name">${esc(it.name || "(sem nome)")}</span><span class="cast-meta">${meta}</span>`;
+    li.onclick = () => { S.castSel = i; renderCastList(); renderCastForm(); };
+    ul.appendChild(li);
+  });
+}
+
+function field(label, key, value, kind = "input", extra = "") {
+  const v = esc(value ?? "");
+  if (kind === "textarea") return `<label>${label}<textarea data-f="${key}" ${extra}>${v}</textarea></label>`;
+  return `<label>${label}<input data-f="${key}" value="${v}" ${extra}></label>`;
+}
+
+function select(label, key, value, options) {
+  const opts = Object.entries(options).map(([k, l]) => `<option value="${esc(k)}" ${k === value ? "selected" : ""}>${esc(l)}</option>`).join("");
+  return `<label>${label}<select data-f="${key}">${opts}</select></label>`;
+}
+
+function renderCastForm() {
+  const box = $("#cast-form");
+  const items = castItems();
+  const it = items[S.castSel];
+  if (!it) { box.innerHTML = '<p class="muted">Escolha um item à esquerda ou adicione um novo.</p>'; return; }
+  const ro = S.cast.format !== "v2" ? "disabled" : "";
+  if (S.castTab === "characters") {
+    const unis = { "": "—", ...Object.fromEntries(S.cast.universes.map(u => [u.id, u.name])) };
+    const seen = S.cast.appearances[it.name] || [];
+    box.innerHTML = `
+      <div class="form-grid">
+        ${field("Nome", "name", it.name)}
+        ${select("Papel", "role", it.role, S.cast.character_roles)}
+        ${field("Origem (nativo, reencarnado, transportado…)", "origin", it.origin)}
+        ${field("Idade", "age", it.age)}
+        ${select("Universo de origem", "universe", it.universe, unis)}
+        ${field("Rótulo na lista do modelo (opcional)", "sheet_label", it.sheet_label, "input", 'placeholder="ex.: Tinaia, the central AI."')}
+      </div>
+      ${field(`Ficha para o modelo, em inglês <span class="muted" data-count></span>`, "sheet", it.sheet, "textarea", 'class="sheet" placeholder="One paragraph: origin, look, personality, powers, how they speak."')}
+      <p class="muted">É o que o modelo lê sobre o personagem em todo capítulo (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar.${it.role === "protagonist" ? " A ficha do protagonista também vai no fim de cada cena, para segurar a voz dele." : ""}</p>
+      ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
+      <div class="muted">Aparece nos capítulos:</div>
+      <div class="chips">${seen.length ? seen.map(n => `<span class="chip" data-ch="${n}">${String(n).padStart(2, "0")}</span>`).join("") : '<span class="muted">nenhum ainda</span>'}</div>
+      <div class="row-actions">
+        <button type="button" data-move="-1">↑</button><button type="button" data-move="1">↓</button>
+        <span class="spacer"></span><button type="button" class="danger-ghost" data-remove>Remover personagem</button>
+      </div>`;
+  } else {
+    box.innerHTML = `
+      <div class="form-grid">
+        ${field("Nome", "name", it.name)}
+        ${select("Papel na história", "role", it.role, S.cast.universe_roles)}
+        ${field("Wiki do Fandom (subdomínio, ex.: stargate)", "wiki", it.wiki)}
+      </div>
+      <label class="check"><input type="checkbox" data-f="active" ${it.active ? "checked" : ""}> Faz parte da história (desmarcado = reserva, fora da lista fechada que o modelo recebe)</label>
+      ${field("Ficha para o modelo, em inglês", "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="What exists here, what never appears, tone."')}
+      ${field("Personagens permitidos deste universo (separados por vírgula)", "allowed_characters", (it.allowed_characters || []).join(", "))}
+      ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
+      <div class="row-actions">
+        <button type="button" data-move="-1">↑</button><button type="button" data-move="1">↓</button>
+        <span class="spacer"></span><button type="button" class="danger-ghost" data-remove>Remover universo</button>
+      </div>`;
+  }
+  if (ro) $$("input, select, textarea, button", box).forEach(el => { el.disabled = true; });
+  const count = () => { const c = $("[data-count]", box); if (c) c.textContent = `(${words(it.sheet)} palavras)`; };
+  count();
+  $$("[data-f]", box).forEach(el => {
+    el.addEventListener("input", () => {
+      const k = el.dataset.f;
+      if (k === "active") it.active = el.checked;
+      else if (k === "allowed_characters") it.allowed_characters = el.value.split(",").map(s => s.trim()).filter(Boolean);
+      else it[k] = el.value;
+      markCastDirty();
+      count();
+      renderCastList();
+    });
+  });
+  $$("[data-ch]", box).forEach(chip => { chip.onclick = () => selectChapter(parseInt(chip.dataset.ch, 10)); });
+  $$("[data-move]", box).forEach(b => {
+    b.onclick = () => {
+      const j = S.castSel + parseInt(b.dataset.move, 10);
+      if (j < 0 || j >= items.length) return;
+      [items[S.castSel], items[j]] = [items[j], items[S.castSel]];
+      S.castSel = j;
+      markCastDirty();
+      renderCastList();
+    };
+  });
+  $("[data-remove]", box).onclick = async () => {
+    if (!(await confirmDlg("Remover", `<p>Remover <b>${esc(it.name)}</b> do registro? A remoção só vale depois de Salvar.</p>`, "Remover", true))) return;
+    items.splice(S.castSel, 1);
+    S.castSel = Math.max(0, S.castSel - 1);
+    markCastDirty();
+    renderCast();
+  };
+}
+
+function renderRosterMissing() {
+  const box = $("#roster-missing");
+  const miss = S.castTab === "characters" && S.cast.format === "v2" ? S.cast.roster_missing : [];
+  if (!miss.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="roster-box"><h4>Na memória da história, fora do registro</h4>
+    <div class="muted">Personagens que surgiram nos capítulos. Adicione ao registro para o modelo ter a ficha deles.</div>
+    ${miss.map((r, i) => `<div class="item"><span>${esc(r.name)}</span><button type="button" data-add-roster="${i}">Adicionar</button></div>`).join("")}</div>`;
+  $$("[data-add-roster]", box).forEach(b => {
+    b.onclick = () => {
+      const r = miss[parseInt(b.dataset.addRoster, 10)];
+      S.cast.characters.push({ name: r.name, role: "supporting", origin: "", age: "", universe: "", notes: r.text, sheet: "", sheet_label: "" });
+      S.cast.roster_missing = miss.filter(x => x !== r);
+      S.castSel = S.cast.characters.length - 1;
+      markCastDirty();
+      renderCast();
+      toast(`${r.name} adicionado. O bloco do roster foi para as notas; escreva a ficha para o modelo e salve.`, "ok", 7000);
+    };
+  });
+}
+
+function addCastItem() {
+  if (S.castTab === "universes") {
+    S.cast.universes.push({ id: "", name: "Novo universo", role: "source", wiki: "", active: true, notes: "", allowed_characters: [], model_sheet: "" });
+    S.castSel = S.cast.universes.length - 1;
+  } else {
+    S.cast.characters.push({ name: "Novo personagem", role: "supporting", origin: "", age: "", universe: "", notes: "", sheet: "", sheet_label: "" });
+    S.castSel = S.cast.characters.length - 1;
+  }
+  markCastDirty();
+  renderCast();
+  const name = $('#cast-form [data-f="name"]');
+  if (name) { name.focus(); name.select(); }
+}
+
+async function saveCast() {
+  try {
+    const res = await api("PUT", `/api/projects/${S.slug}/cast`, {
+      characters: S.cast.characters, universes: S.cast.universes, structure: S.cast.structure,
+    });
+    const sel = S.castSel;
+    S.cast = res;
+    S.castSel = Math.min(sel, castItems().length - 1);
+    markCastDirty(false);
+    renderCast();
+    toast(`Registro salvo. ${res.message}`, "ok", 7000);
+  } catch (e) { fail(e); }
+}
+
+async function migrateCast() {
+  const ok = await confirmDlg("Converter registro",
+    "<p>Converte o Registro Akáshico para o formato v2: universos e personagens são lidos do texto e passam a ser editados nesta tela. O arquivo anterior fica em <code>registro_akashico.anterior.md</code>.</p>", "Converter");
+  if (!ok) return;
+  try {
+    const res = await api("POST", `/api/projects/${S.slug}/cast/migrate`);
+    S.cast = res;
+    S.castSel = 0;
+    renderCast();
+    toast(res.message, "ok", 8000);
   } catch (e) { fail(e); }
 }
 
@@ -858,14 +1076,18 @@ function bind() {
   $("#btn-save-state").onclick = saveState;
   $("#btn-save-akashic").onclick = saveAkashic;
   $("#btn-export").onclick = exportBook;
+  $("#btn-save-cast").onclick = saveCast;
+  $("#btn-cast-add").onclick = addCastItem;
+  $$("#cast-tabs button").forEach(b => { b.onclick = () => { S.castTab = b.dataset.ctab; S.castSel = 0; renderCast(); }; });
   document.addEventListener("keydown", ev => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       if (S.editing) { ev.preventDefault(); saveFinal(); }
       else if (S.panel === "chapter" && S.tab === "premise") { ev.preventDefault(); savePremise(); }
+      else if (S.panel === "cast" && S.castDirty) { ev.preventDefault(); saveCast(); }
     }
   });
   window.addEventListener("beforeunload", ev => {
-    if (S.editing || premiseDirty()) { ev.preventDefault(); ev.returnValue = ""; }
+    if (S.editing || premiseDirty() || S.castDirty) { ev.preventDefault(); ev.returnValue = ""; }
   });
 }
 

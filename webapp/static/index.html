@@ -31,6 +31,7 @@
     </div>
     <ol id="chapter-list" class="chapter-list"></ol>
     <div class="side-footer">
+      <button class="link" data-panel="cast">Personagens e universos</button>
       <button class="link" data-panel="story">História até agora</button>
       <button class="link" data-panel="akashic">Registro Akáshico</button>
       <button class="link" data-panel="export">Exportar livro</button>
@@ -86,6 +87,28 @@
       <div class="tab hidden" data-tab="live"><article class="reader live" id="live-view"></article></div>
     </div>
 
+    <div id="panel-cast" class="panel hidden">
+      <div class="chapter-head">
+        <h2>Personagens e universos</h2>
+        <span class="spacer"></span>
+        <span class="muted" id="cast-dirty"></span>
+        <button class="primary" id="btn-save-cast">Salvar</button>
+      </div>
+      <div class="notice hidden" id="cast-v1"></div>
+      <nav class="tabs" id="cast-tabs">
+        <button data-ctab="characters" class="active">Personagens</button>
+        <button data-ctab="universes">Universos</button>
+      </nav>
+      <div class="cast-layout">
+        <div class="cast-side">
+          <ul class="cast-list" id="cast-items"></ul>
+          <button id="btn-cast-add">+ Adicionar</button>
+          <div id="roster-missing"></div>
+        </div>
+        <div class="cast-form" id="cast-form"></div>
+      </div>
+    </div>
+
     <div id="panel-story" class="panel hidden">
       <h2>História até agora</h2>
       <p class="muted">É o que o modelo lembra da história. Os campos são atualizados a cada capítulo; você pode corrigir à mão.</p>
@@ -100,7 +123,7 @@
 
     <div id="panel-akashic" class="panel hidden">
       <h2>Registro Akáshico</h2>
-      <p class="muted">Texto completo do registro. Ao salvar, a versão curta que vai para o modelo é gerada de novo, e a anterior fica em <code>registro_akashico.anterior.md</code>. O editor com abas de universos e personagens continua na versão antiga do programa por enquanto.</p>
+      <p class="muted">Texto completo do registro. Ao salvar, a versão curta que vai para o modelo é gerada de novo, e a anterior fica em <code>registro_akashico.anterior.md</code>. As listas das seções 5.8 e 9.5 são geradas pela tela <b>Personagens e universos</b>: edite lá.</p>
       <textarea class="editor tall mono" id="akashic-edit"></textarea>
       <div class="tab-tools"><button class="primary" id="btn-save-akashic">Salvar registro</button><span class="muted" id="akashic-msg"></span></div>
     </div>

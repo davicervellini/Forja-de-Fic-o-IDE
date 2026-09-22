@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from pipeline import cast
 from pipeline import chapters as ch
 from pipeline import config
 from pipeline.akashic import build_registro_modelo
@@ -93,6 +94,12 @@ class SettingsBody(BaseModel):
 
 class KeyBody(BaseModel):
     key: str = ""
+
+
+class CastBody(BaseModel):
+    characters: list[dict[str, Any]]
+    universes: list[dict[str, Any]]
+    structure: str | None = None
 
 
 PHASES = ("DRAFTING", "REFINING", "SUMMARIZING")
@@ -302,6 +309,28 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         if not ok:
             raise HTTPException(400, msg)
         return {"message": msg}
+
+    # ── Personagens e universos ──────────────────────────────
+
+    @app.get("/api/projects/{slug}/cast")
+    def get_cast(slug: str):
+        return cast.overview(load(slug))
+
+    @app.put("/api/projects/{slug}/cast")
+    def put_cast(slug: str, body: CastBody):
+        ensure_idle(slug)
+        project = load(slug)
+        try:
+            msg = cast.save(project, body.characters, body.universes, body.structure)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"message": msg, **cast.overview(project)}
+
+    @app.post("/api/projects/{slug}/cast/migrate")
+    def migrate_cast(slug: str):
+        ensure_idle(slug)
+        project = load(slug)
+        return {"message": cast.migrate(project), **cast.overview(project)}
 
     # ── Capítulos ────────────────────────────────────────────
 

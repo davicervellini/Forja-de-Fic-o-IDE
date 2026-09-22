@@ -232,3 +232,27 @@ dialog.wide { width: min(900px, 94vw); }
 }
 .key-row .key-name { font-size: 13px; }
 .key-row .key-msg { grid-column: 2 / -1; font-size: 12px; }
+
+/* ── Personagens e universos ── */
+.cast-layout { display: grid; grid-template-columns: 260px 1fr; gap: 18px; align-items: start; }
+.cast-side { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; }
+.cast-list { list-style: none; margin: 0; padding: 0; max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); }
+.cast-list li { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.cast-list li:last-child { border-bottom: none; }
+.cast-list li:hover { background: var(--bg-3); }
+.cast-list li.active { background: var(--bg-3); box-shadow: inset 3px 0 0 var(--accent); }
+.cast-list li.inactive .cast-name { color: var(--muted); }
+.cast-name { font-weight: 600; }
+.cast-meta { font-size: 12px; color: var(--muted); }
+.cast-meta .warn { color: var(--amber); }
+.cast-form { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.cast-form .row-actions { display: flex; gap: 8px; margin-top: 6px; }
+.cast-form textarea.sheet { min-height: 150px; font: 14px/1.55 var(--serif); }
+.cast-form textarea.notes { min-height: 90px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.chip { font-size: 12px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; cursor: pointer; }
+.chip:hover { border-color: var(--accent); }
+.roster-box { border: 1px dashed var(--amber); border-radius: var(--radius); padding: 10px; font-size: 13px; }
+.roster-box h4 { margin: 0 0 6px; font-size: 13px; color: var(--amber); }
+.roster-box .item { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.roster-box .item span { flex: 1; }

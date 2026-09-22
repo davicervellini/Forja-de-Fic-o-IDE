@@ -48,8 +48,10 @@ criar e abrir projetos, adicionar capítulos, gerar com o texto aparecendo ao vi
 cancelar, editar o texto final, refazer um capítulo (com a premissa ajustada), atualizar
 a memória depois de uma edição, ver e restaurar versões anteriores, editar a memória da
 história e o Registro Akáshico em texto, exportar o livro (EPUB, Markdown, TXT, HTML) e
-mudar as configurações. O editor do Registro por abas, o assistente de criação e a
-importação da wiki continuam na interface antiga até serem migrados.
+mudar as configurações. A tela **Personagens e universos** edita as fichas que vão para
+o modelo (seções 5.8 e 9.5 do Registro), mostra em que capítulos cada personagem aparece
+e lista quem surgiu na memória da história sem ficha no registro. O assistente de
+criação e a importação da wiki continuam na interface antiga até serem migrados.
 
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
