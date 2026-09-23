@@ -257,10 +257,16 @@ class StoryProject:
         if not self.chapters_dir.exists():
             return entries
 
-        # Lista as pastas capitulo_XX ordenadas
+        # Lista as pastas capitulo_XX em ordem numérica: pelo nome, capitulo_100 viria antes de capitulo_11.
+        def chapter_number(d: Path) -> int:
+            try:
+                return int(d.name.split("_")[1])
+            except (IndexError, ValueError):
+                return 10 ** 9
+
         chapter_dirs = sorted(
-            d for d in self.chapters_dir.iterdir()
-            if d.is_dir() and d.name.startswith("capitulo_")
+            (d for d in self.chapters_dir.iterdir() if d.is_dir() and d.name.startswith("capitulo_")),
+            key=chapter_number,
         )
 
         for ch_dir in chapter_dirs:

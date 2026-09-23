@@ -237,3 +237,51 @@ def test_prompts_de_sistema_sem_barra_invertida_solta():
     for name in dir(P):
         if name.startswith("SYSTEM_"):
             assert "\\" not in getattr(P, name), name
+
+
+def test_capitulos_em_ordem_numerica(tmp_path):
+    """capitulo_100 vem depois de capitulo_99, não logo depois de capitulo_10."""
+    from pipeline.project import StoryProject
+    proj = StoryProject.create(tmp_path, "p")
+    for n in (1, 2, 10, 11, 99, 100, 101):
+        proj.chapter_dir(n).mkdir(parents=True, exist_ok=True)
+        (proj.chapter_dir(n) / "premissa.md").write_text(f"P{n}", encoding="utf-8")
+    assert [e.num for e in proj.scan_chapters()] == [1, 2, 10, 11, 99, 100, 101]
+
+
+def test_saida_so_com_tokens_especiais_descarrega_e_tenta_de_novo():
+    """O backend Vulkan às vezes devolve só <unused50>: o modelo é descarregado e a geração repete uma vez."""
+    import json as _json
+    from unittest.mock import patch as _patch
+    import requests as _requests
+    from pipeline import api, config as _config
+
+    calls = {"gen": 0, "unload": 0}
+
+    class Stream:
+        status_code = 200
+
+        def __init__(self, lines):
+            self.lines = lines
+
+        def iter_lines(self, decode_unicode=True):
+            yield from self.lines
+
+        def close(self):
+            pass
+
+    def fake_post(url, json=None, **kw):
+        if json.get("keep_alive") == 0:
+            calls["unload"] += 1
+            return Stream([])
+        calls["gen"] += 1
+        if calls["gen"] == 1:
+            return Stream([_json.dumps({"response": "<unused50>"}) for _ in range(40)])
+        return Stream([_json.dumps({"response": "Real text here, finally.", "done": True})])
+
+    seen = []
+    with _patch.object(_requests, "post", fake_post), _patch.object(_config, "OLLAMA_GENERATE_URL", "http://x/api/generate"):
+        out = api.generate_text("gemma4:12b", "s", "u", on_token=seen.append)
+    assert out == "Real text here, finally."
+    assert calls == {"gen": 2, "unload": 1}
+    assert all("<unused" not in s for s in seen)

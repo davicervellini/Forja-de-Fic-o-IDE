@@ -9,6 +9,7 @@ Timeouts generosos para acomodar troca de modelo na VRAM.
 
 import json
 import logging
+import re
 import threading
 import time
 from typing import Callable
@@ -24,6 +25,25 @@ logger = logging.getLogger(__name__)
 class OllamaError(Exception):
     """Erro específico de comunicação com o Ollama."""
     pass
+
+
+# Tokens especiais que o modelo nunca deveria escrever. O backend Vulkan com placas AMD antigas
+# às vezes entra num estado em que o gemma só devolve "<unused50>" sem parar.
+_SPECIAL_TOKENS = re.compile(r"<unused\d+>|<pad>|<mask>|<start_of_image>|<end_of_image>")
+# Tokens especiais seguidos, sem texto de verdade, antes de desistir da resposta.
+_JUNK_LIMIT = 25
+
+
+class _GarbageOutput(Exception):
+    """A resposta veio só com tokens especiais: o modelo carregado está num estado ruim."""
+
+
+def unload_model(model: str):
+    """Pede ao Ollama para descarregar o modelo; a próxima geração carrega de novo, limpo."""
+    try:
+        requests.post(config.OLLAMA_GENERATE_URL, json={"model": model, "keep_alive": 0}, timeout=60)
+    except requests.RequestException as e:
+        logger.warning(f"Não foi possível descarregar o modelo '{model}': {e}")
 
 
 class GenerationInterrupted(Exception):
@@ -96,6 +116,7 @@ def generate_text(
     cancel_event: threading.Event | None = None,
     extra_options: dict | None = None,
     provider: str = "ollama",
+    _retry: bool = True,
 ) -> str:
     """
     Envia uma requisição de geração ao Ollama (ou a um provedor na nuvem) com streaming.
@@ -164,6 +185,7 @@ def generate_text(
     }
 
     accumulated_text = ""
+    junk = 0
 
     try:
         logger.info(
@@ -213,12 +235,19 @@ def generate_text(
             if chunk.get("error"):
                 raise OllamaError(f"Ollama reportou erro durante a geração: {chunk['error']}")
 
-            # Extrai o token da resposta
+            # Extrai o token da resposta, sem tokens especiais.
             token = chunk.get("response", "")
             if token:
-                accumulated_text += token
-                if on_token:
-                    on_token(token)
+                clean = _SPECIAL_TOKENS.sub("", token)
+                if clean != token:
+                    junk += 1
+                    if junk >= _JUNK_LIMIT and len(accumulated_text.split()) < 10:
+                        response.close()
+                        raise _GarbageOutput()
+                if clean:
+                    accumulated_text += clean
+                    if on_token:
+                        on_token(clean)
 
             # Verifica se a geração terminou
             if chunk.get("done", False):
@@ -236,10 +265,25 @@ def generate_text(
                     )
                 break
 
+        if junk and len(accumulated_text.split()) < 10:
+            raise _GarbageOutput()
         return accumulated_text
 
     except GenerationInterrupted:
         raise  # Re-lança sem embrulhar
+
+    except _GarbageOutput:
+        if not _retry:
+            raise OllamaError(
+                f"O modelo '{model}' devolveu só tokens especiais (<unused…>) duas vezes seguidas. "
+                "É uma falha do Ollama com esta placa de vídeo: feche o Ollama pela bandeja, abra de novo "
+                "e gere outra vez."
+            )
+        logger.warning(f"O modelo '{model}' devolveu só tokens especiais. Descarregando e tentando de novo.")
+        unload_model(model)
+        return generate_text(model, system_prompt, user_prompt, temperature=temperature, num_ctx=num_ctx,
+                             timeout=timeout, on_token=on_token, cancel_event=cancel_event,
+                             extra_options=extra_options, provider=provider, _retry=False)
 
     except requests.ConnectionError as e:
         raise OllamaError(
