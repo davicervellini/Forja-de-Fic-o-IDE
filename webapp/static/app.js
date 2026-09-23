@@ -463,6 +463,7 @@ async function loadChapter(num, tab = "final") {
   $("#ch-notice").classList.toggle("hidden", !notes.length);
   $("#btn-refresh-memory").classList.toggle("hidden", !(c.info.memory_stale && c.final));
   $("#btn-redo").textContent = meta.status === "done" || c.final ? "⟲ Refazer" : "▶ Gerar";
+  ["#btn-copy-title", "#btn-copy-text", "#btn-copy-html"].forEach(sel => $(sel).classList.toggle("hidden", !c.final.trim()));
 
   setEditing(false);
   renderReader($("#final-view"), c.final, meta.status === "pending" ? "Capítulo ainda não gerado. Escreva a premissa e clique em ▶ Gerar." : "Sem texto final.");
@@ -565,6 +566,52 @@ async function saveFinal() {
     setEditing(false);
     await refreshProject();
     loadChapter(S.current, "final");
+  } catch (e) { fail(e); }
+}
+
+// ── Copiar para o Royal Road ────────────────────────────────
+// O editor de capítulos do Royal Road (TinyMCE) tem o título num campo separado. O texto vai para a
+// área de transferência como HTML (um <p> por parágrafo, com itálico) e como texto puro; o botão
+// de HTML copia o código para colar no botão <> (código-fonte) do editor.
+
+async function copyRich(html, text) {
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
+      })]);
+      return;
+    }
+  } catch { /* cai no método antigo abaixo */ }
+  const box = document.createElement("div");
+  box.contentEditable = "true";
+  box.style.cssText = "position:fixed;left:-9999px;top:0;white-space:normal";
+  box.innerHTML = html || esc(text);
+  document.body.appendChild(box);
+  const range = document.createRange();
+  range.selectNodeContents(box);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand("copy");
+  sel.removeAllRanges();
+  box.remove();
+}
+
+async function copyForPublishing(what) {
+  try {
+    const r = await api("GET", `/api/projects/${S.slug}/chapters/${S.current}/publish`);
+    if (what === "text") {
+      await copyRich(r.html, r.text);
+      toast(`Texto copiado (${r.words} palavras). Cole no editor de capítulos do Royal Road.`);
+    } else if (what === "html") {
+      await copyRich(esc(r.html), r.html);
+      toast("HTML copiado. No editor do Royal Road, clique em <> (código-fonte) e cole lá.");
+    } else {
+      await copyRich(esc(r.title), r.title);
+      toast(`Título copiado: ${r.title}`);
+    }
   } catch (e) { fail(e); }
 }
 
@@ -704,7 +751,7 @@ async function exportBook() {
       window.location = `/api/projects/${S.slug}/export/download?${q}`;
       return;
     }
-    const path = await desktop.save_dialog(`${S.slug}.${fmt}`, fmt);
+    const path = await desktop.save_dialog(fmt === "royalroad" ? `${S.slug}-royalroad.zip` : `${S.slug}.${fmt}`, fmt);
     if (!path) return;
     const res = await api("POST", `/api/projects/${S.slug}/export`, { format: fmt, first, last, path });
     $("#export-msg").innerHTML = `${res.chapters} capítulo(s) exportado(s) para <code>${esc(res.path)}</code> <button class="link" id="btn-reveal">Abrir pasta</button>`;
@@ -1620,6 +1667,9 @@ function bind() {
   $$("#ch-tabs button").forEach(b => { b.onclick = () => switchTab(b.dataset.tab); });
   $$(".side-footer .link").forEach(b => { b.onclick = () => openPanel(b.dataset.panel); });
   $("#btn-edit-final").onclick = () => { switchTab("final"); setEditing(true); };
+  $("#btn-copy-title").onclick = () => copyForPublishing("title");
+  $("#btn-copy-text").onclick = () => copyForPublishing("text");
+  $("#btn-copy-html").onclick = () => copyForPublishing("html");
   $("#btn-cancel-final").onclick = () => setEditing(false);
   $("#btn-save-final").onclick = saveFinal;
   $("#btn-save-premise").onclick = () => savePremise().catch(() => {});

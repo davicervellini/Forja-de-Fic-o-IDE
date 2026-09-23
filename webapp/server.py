@@ -25,7 +25,7 @@ from pipeline import chapters as ch
 from pipeline import config
 from pipeline.akashic import build_registro_modelo
 from pipeline.api import check_ollama_health, list_installed_models, cloud_paused, resume_cloud
-from pipeline.export import FORMATS, default_filename, export_project
+from pipeline.export import FORMATS, default_filename, export_project, collect_chapters, royalroad_html, royalroad_text, royalroad_title
 from pipeline.io_utils import read_file, write_file
 from pipeline.orchestrator import ChapterResult, PipelineOrchestrator
 from pipeline import credentials
@@ -403,6 +403,18 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             "has_snapshot": ch.has_snapshot(project, num),
             "versions": ch.list_versions(project, num),
         }
+
+    @app.get("/api/projects/{slug}/chapters/{num}/publish")
+    def chapter_publish(slug: str, num: int):
+        """Título e texto do capítulo no formato do editor de capítulos do Royal Road."""
+        project = load(slug)
+        chapter_exists(project, num)
+        found = collect_chapters(project, num, num)
+        if not found:
+            raise HTTPException(400, f"O capítulo {num:02d} ainda não tem texto final.")
+        ch = found[0]
+        text = royalroad_text(ch)
+        return {"title": royalroad_title(ch), "text": text, "html": royalroad_html(ch), "words": len(text.split())}
 
     @app.post("/api/projects/{slug}/chapters")
     def add_chapter(slug: str, body: NewChapter):

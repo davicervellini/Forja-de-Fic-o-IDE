@@ -273,7 +273,6 @@
   "Muda só o idioma dos próximos capítulos gerados e do livro exportado. Capítulos prontos não são traduzidos.": "Changes only the language of the next generated chapters and of the exported book. Finished chapters are not translated.",
   "Formato": "Format",
   "EPUB (leitores de e-book)": "EPUB (e-book readers)",
-  "Markdown (Webnovel, AO3, Wattpad)": "Markdown (Webnovel, AO3, Wattpad)",
   "Texto puro": "Plain text",
   "HTML (página única)": "HTML (single page)",
   "Do capítulo": "From chapter",
@@ -414,5 +413,16 @@
   "Planta: onde ficam as áreas principais, níveis, entradas. O que existe ali. Estado na época da história. Never: o que não existe ali.": "Layout: where the main areas are, levels, entrances. What is there. State at the story's time. Never: what is not there.",
   "O que existe aqui, o que nunca aparece, tom.": "What exists here, what never appears, tone.",
   "Para cada nome, o programa busca a página na wiki do Fandom e o modelo da fase de resumo escreve a ficha no seu idioma.": "For each name, the program fetches the Fandom wiki page and the summary model writes the sheet in your language.",
-  "Para cada local, o programa busca a página na wiki (primeiro pelo nome exato), o modelo da fase de resumo escreve a ficha com a planta, o que existe ali e o que nunca existe, e a página sugere os sublocais para importar depois. Ex.: Atlantis, Chair room, Gate Room.": "For each place, the program fetches the wiki page (exact name first), the summary model writes the sheet with the layout, what is there and what never is, and the page suggests sub-places to import later. E.g.: Atlantis, Chair room, Gate Room."
+  "Para cada local, o programa busca a página na wiki (primeiro pelo nome exato), o modelo da fase de resumo escreve a ficha com a planta, o que existe ali e o que nunca existe, e a página sugere os sublocais para importar depois. Ex.: Atlantis, Chair room, Gate Room.": "For each place, the program fetches the wiki page (exact name first), the summary model writes the sheet with the layout, what is there and what never is, and the page suggests sub-places to import later. E.g.: Atlantis, Chair room, Gate Room.",
+  "Copiar título": "Copy title",
+  "Copiar texto": "Copy text",
+  "Markdown (AO3, Wattpad)": "Markdown (AO3, Wattpad)",
+  "Título copiado: {x}": "Title copied: {x}",
+  "Título do capítulo para o campo Título do Capítulo do Royal Road": "Chapter title for the Royal Road Chapter Title field",
+  "Texto do capítulo, um parágrafo por bloco, com itálico, para colar no editor de capítulos do Royal Road": "Chapter text, one paragraph per block, with italics, to paste into the Royal Road chapter editor",
+  "Código HTML do capítulo, para colar no botão <> (código-fonte) do editor do Royal Road": "Chapter HTML code, to paste into the <> (source code) button of the Royal Road editor",
+  "Copiar HTML": "Copy HTML",
+  "Royal Road (um arquivo HTML por capítulo, em .zip)": "Royal Road (one HTML file per chapter, in a .zip)",
+  "Texto copiado ({x} palavras). Cole no editor de capítulos do Royal Road.": "Text copied ({x} words). Paste it into the Royal Road chapter editor.",
+  "HTML copiado. No editor do Royal Road, clique em <> (código-fonte) e cole lá.": "HTML copied. In the Royal Road editor, click <> (source code) and paste it there."
 }

@@ -1,8 +1,8 @@
 """
 export.py — Exporta os capítulos de um projeto para leitura ou publicação.
 
-Formatos: Markdown (.md), texto puro (.txt), HTML de página única (.html) e EPUB 3
-(.epub). O EPUB é montado à mão com zipfile, sem dependências. Usa o texto final de
+Formatos: Markdown (.md), texto puro (.txt), HTML de página única (.html), EPUB 3
+(.epub) e Royal Road (.zip com um .html por capítulo, no formato do editor de capítulos do site). O EPUB é montado à mão com zipfile, sem dependências. Usa o texto final de
 cada capítulo; capítulos sem texto final ficam de fora.
 """
 
@@ -23,7 +23,9 @@ FORMATS = {
     "txt": "Texto",
     "html": "HTML",
     "epub": "EPUB",
+    "royalroad": "Royal Road",
 }
+
 
 
 @dataclass
@@ -205,6 +207,74 @@ def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: st
     return path
 
 
+# ── Royal Road ───────────────────────────────────────────────
+# O editor de capítulos do Royal Road é o TinyMCE. Ele aceita HTML colado e já põe espaço entre
+# os parágrafos, então cada parágrafo vira um <p> e não pode haver parágrafo vazio. O título do
+# capítulo fica num campo próprio e o site não numera sozinho: vai "Chapter 1: Tuesday".
+# Caixas [System] seguidas vão numa tabela de uma célula, o jeito de mostrar tela de sistema nos
+# LitRPG e GameLit do site; a quebra de cena é um "* * *" centralizado.
+
+ROYALROAD_BREAK = '<p style="text-align: center;">* * *</p>'
+
+
+def royalroad_title(ch: ExportChapter) -> str:
+    return ch.title.strip()
+
+
+def _royalroad_blocks(ch: ExportChapter) -> list[tuple[str, list[str]]]:
+    """("p", [texto]), ("system", [linhas]) ou ("break", []), na ordem do capítulo."""
+    out: list[tuple[str, list[str]]] = []
+    for i, scene in enumerate(ch.scenes):
+        if i:
+            out.append(("break", []))
+        for para in re.split(r"\n\s*\n", scene.strip()):
+            lines = [l.strip() for l in para.splitlines() if l.strip()]
+            if not lines:
+                continue
+            if all(l.startswith("[") for l in lines):
+                if out and out[-1][0] == "system":
+                    out[-1][1].extend(lines)
+                else:
+                    out.append(("system", lines))
+            else:
+                out.append(("p", [" ".join(lines)]))
+    return out
+
+
+def royalroad_text(ch: ExportChapter) -> str:
+    """Texto puro de reserva: parágrafos separados por uma linha em branco, sem marcação."""
+    parts = []
+    for kind, lines in _royalroad_blocks(ch):
+        if kind == "break":
+            parts.append("* * *")
+        else:
+            parts.extend(_plain(l) for l in lines)
+    return "\n\n".join(parts) + "\n"
+
+
+def royalroad_html(ch: ExportChapter) -> str:
+    """HTML para colar no editor (ou no botão de código-fonte <>): <p> por parágrafo, com itálico."""
+    parts = []
+    for kind, lines in _royalroad_blocks(ch):
+        if kind == "break":
+            parts.append(ROYALROAD_BREAK)
+        elif kind == "system":
+            cell = "<br>".join(_inline(l) for l in lines)
+            parts.append(f'<table style="width: 100%;"><tbody><tr><td>{cell}</td></tr></tbody></table>')
+        else:
+            parts.append(f"<p>{_inline(lines[0])}</p>")
+    return "\n".join(parts)
+
+
+def write_royalroad_zip(path: Path, chapters: list[ExportChapter]) -> Path:
+    """Um .html por capítulo, para colar no código-fonte do editor. O título vai no nome do arquivo."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for ch in chapters:
+            name = re.sub(r'[\\/:*?"<>|]+', "-", royalroad_title(ch)).strip() or f"Chapter {ch.num}"
+            z.writestr(f"{ch.num:03d} - {name}.html", royalroad_html(ch) + "\n")
+    return path
+
+
 # ── Entrada única ────────────────────────────────────────────
 
 def export_project(
@@ -227,6 +297,8 @@ def export_project(
     if fmt == "epub":
         lang = project.metadata.get("language", "en")
         write_epub(dest, title, chapters, author=project.metadata.get("author", ""), lang=lang)
+    elif fmt == "royalroad":
+        write_royalroad_zip(dest, chapters)
     elif fmt == "md":
         dest.write_text(to_markdown(title, chapters, scene_break), encoding="utf-8")
     elif fmt == "txt":
@@ -238,5 +310,5 @@ def export_project(
 
 def default_filename(project: StoryProject, fmt: str) -> str:
     slug = project.metadata.get("slug") or project.project_dir.name
-    return f"{slug}.{fmt}"
+    return f"{slug}-royalroad.zip" if fmt == "royalroad" else f"{slug}.{fmt}"
 

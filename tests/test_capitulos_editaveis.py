@@ -407,3 +407,30 @@ def test_interface_web_e_servida(tmp_path):
     r = c.get("/")
     assert r.status_code == 200 and "Forja de Ficção" in r.text
     assert c.get("/app.js").status_code == 200
+
+
+def test_exportacao_para_o_royal_road(tmp_path):
+    """Título com número, <p> por parágrafo sem parágrafo vazio, [System] em tabela e um .html por capítulo."""
+    from pipeline.export import collect_chapters, royalroad_html, royalroad_text, royalroad_title
+    proj = _project(tmp_path)
+    proj.chapter_dir(1).mkdir(parents=True, exist_ok=True)
+    (proj.chapter_dir(1) / "capitulo_final.md").write_text(
+        "Chapter 1: Tuesday\n\nThe alarm went off.\nHe *hated* it.\n\n[System] Build progress: 0%.\n[System] Welcome.\n\n"
+        "* * *\n\nNew scene.", encoding="utf-8")
+    ch = collect_chapters(proj, 1, 1)[0]
+    assert royalroad_title(ch) == "Chapter 1: Tuesday"
+    assert royalroad_text(ch) == ("The alarm went off. He hated it.\n\n[System] Build progress: 0%.\n\n[System] Welcome.\n\n"
+                                  "* * *\n\nNew scene.\n")
+    html = royalroad_html(ch)
+    assert html.splitlines() == [
+        "<p>The alarm went off. He <em>hated</em> it.</p>",
+        '<table style="width: 100%;"><tbody><tr><td>[System] Build progress: 0%.<br>[System] Welcome.</td></tr></tbody></table>',
+        '<p style="text-align: center;">* * *</p>',
+        "<p>New scene.</p>",
+    ]
+    assert "<p></p>" not in html
+    path, count = export_project(proj, "royalroad", tmp_path / "out.zip")
+    with zipfile.ZipFile(path) as z:
+        assert z.namelist() == ["001 - Chapter 1- Tuesday.html"]
+        assert z.read("001 - Chapter 1- Tuesday.html").decode("utf-8").startswith("<p>The alarm went off.")
+    assert count == 1

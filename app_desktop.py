@@ -92,7 +92,9 @@ class DesktopApi:
         "md": "Markdown (*.md)",
         "txt": "Texto (*.txt)",
         "html": "Página HTML (*.html)",
+        "royalroad": "Royal Road, um arquivo por capítulo (*.zip)",
     }
+    EXTENSIONS = {"royalroad": "zip"}
 
     def __init__(self):
         # Com sublinhado: o pywebview não expõe à página atributos que começam com _.
@@ -109,8 +111,9 @@ class DesktopApi:
         if not result:
             return None
         path = result if isinstance(result, str) else result[0]
-        if not path.lower().endswith(f".{fmt}"):
-            path += f".{fmt}"
+        ext = self.EXTENSIONS.get(fmt, fmt)
+        if not path.lower().endswith(f".{ext}"):
+            path += f".{ext}"
         return path
 
     def reveal(self, path: str):

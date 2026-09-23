@@ -66,6 +66,9 @@
           <button id="btn-edit-final">✎ Editar</button>
           <button id="btn-save-final" class="primary hidden">Salvar</button>
           <button id="btn-cancel-final" class="hidden">Descartar alterações</button>
+          <button id="btn-copy-title" title="Título do capítulo para o campo Título do Capítulo do Royal Road">Copiar título</button>
+          <button id="btn-copy-text" title="Texto do capítulo, um parágrafo por bloco, com itálico, para colar no editor de capítulos do Royal Road">Copiar texto</button>
+          <button id="btn-copy-html" title="Código HTML do capítulo, para colar no botão &lt;&gt; (código-fonte) do editor do Royal Road">Copiar HTML</button>
           <span class="muted" id="final-hint"></span>
         </div>
         <article class="reader" id="final-view"></article>
@@ -152,7 +155,8 @@
       <div class="form-grid">
         <label>Formato<select id="export-format">
           <option value="epub">EPUB (leitores de e-book)</option>
-          <option value="md">Markdown (Webnovel, AO3, Wattpad)</option>
+          <option value="royalroad">Royal Road (um arquivo HTML por capítulo, em .zip)</option>
+          <option value="md">Markdown (AO3, Wattpad)</option>
           <option value="txt">Texto puro</option>
           <option value="html">HTML (página única)</option>
         </select></label>

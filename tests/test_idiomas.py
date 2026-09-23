@@ -7,6 +7,7 @@ Rodam com pytest ou com qualquer runner que passe `tmp_path`.
 
 import json
 import re
+from html import unescape
 from pathlib import Path
 from unittest.mock import patch
 
@@ -115,8 +116,9 @@ def test_textos_fixos_da_tela_tem_traducao_em_ingles():
         if text and re.search(r"[A-Za-zÀ-ÿ]{2}", text) and text not in keys:
             missing.append(text)
     for m in re.finditer(r'(?:placeholder|title)="([^"]+)"', html):
-        if m.group(1) not in keys:
-            missing.append(m.group(1))
+        value = unescape(m.group(1))  # o navegador entrega &quot; já como aspas
+        if value not in keys:
+            missing.append(value)
     assert not missing, f"Sem tradução em en.json: {missing}"
 
 

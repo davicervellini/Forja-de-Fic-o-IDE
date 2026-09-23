@@ -56,7 +56,7 @@ A API local (`webapp/server.py`, FastAPI) roda só em 127.0.0.1. Nesta interface
 criar e abrir projetos, adicionar capítulos, gerar com o texto aparecendo ao vivo,
 cancelar, editar o texto final, refazer um capítulo (com a premissa ajustada), atualizar
 a memória depois de uma edição, ver e restaurar versões anteriores, editar a memória da
-história e o Registro Akáshico em texto, exportar o livro (EPUB, Markdown, TXT, HTML) e
+história e o Registro Akáshico em texto, exportar o livro (EPUB, Royal Road, Markdown, TXT, HTML) e
 mudar as configurações. A tela **Personagens e universos** edita as fichas que vão para
 o modelo (seções 5.8 e 9.5 do Registro), mostra em que capítulos cada personagem aparece
 e lista quem surgiu na memória da história sem ficha no registro. O botão **Importar da
@@ -94,6 +94,13 @@ para o texto dos capítulos e para o livro exportado. Mudar o idioma da históri
 traduz capítulos prontos. A interface tem tradução para português e inglês; para
 acrescentar outra, copie `webapp/static/i18n/en.json` para `<código>.json`, traduza os
 valores e inclua o código em `UI_TRANSLATED` (`pipeline/languages.py`).
+
+Para publicar no Royal Road, a aba **Texto final** de cada capítulo tem **Copiar título**
+("Chapter 1: Tuesday", para o campo de título), **Copiar texto** (um parágrafo por bloco, com
+itálico, para colar no editor) e **Copiar HTML** (o mesmo texto em código, para colar no botão
+<> do editor, se a colagem normal falhar). Caixas [System] vão numa tabela de uma célula e a
+quebra de cena é um "* * *" centralizado. A exportação **Royal Road** gera um .zip com um .html
+por capítulo. Deixe "Ativar a Pasta Limpa" desligado: o texto já vem sem linhas vazias.
 
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
