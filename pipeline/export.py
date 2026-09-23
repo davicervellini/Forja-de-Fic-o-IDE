@@ -211,8 +211,9 @@ def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: st
 # O editor de capítulos do Royal Road é o TinyMCE. Ele aceita HTML colado e já põe espaço entre
 # os parágrafos, então cada parágrafo vira um <p> e não pode haver parágrafo vazio. O título do
 # capítulo fica num campo próprio e o site não numera sozinho: vai "Chapter 1: Tuesday".
-# Caixas [System] seguidas vão numa tabela de uma célula, o jeito de mostrar tela de sistema nos
-# LitRPG e GameLit do site; a quebra de cena é um "* * *" centralizado.
+# Caixas [System] seguidas e blocos de terminal ("> comando" e a saída) vão numa tabela de uma
+# célula, o jeito de mostrar tela de sistema nos LitRPG e GameLit do site, com uma linha por
+# linha. A quebra de cena é um "* * *" centralizado.
 
 ROYALROAD_BREAK = '<p style="text-align: center;">* * *</p>'
 
@@ -222,7 +223,7 @@ def royalroad_title(ch: ExportChapter) -> str:
 
 
 def _royalroad_blocks(ch: ExportChapter) -> list[tuple[str, list[str]]]:
-    """("p", [texto]), ("system", [linhas]) ou ("break", []), na ordem do capítulo."""
+    """("p", [linhas]), ("system", [linhas]) ou ("break", []), na ordem do capítulo."""
     out: list[tuple[str, list[str]]] = []
     for i, scene in enumerate(ch.scenes):
         if i:
@@ -231,13 +232,13 @@ def _royalroad_blocks(ch: ExportChapter) -> list[tuple[str, list[str]]]:
             lines = [l.strip() for l in para.splitlines() if l.strip()]
             if not lines:
                 continue
-            if all(l.startswith("[") for l in lines):
+            if all(l.startswith("[") for l in lines) or lines[0].startswith(">"):
                 if out and out[-1][0] == "system":
                     out[-1][1].extend(lines)
                 else:
                     out.append(("system", lines))
             else:
-                out.append(("p", [" ".join(lines)]))
+                out.append(("p", lines))
     return out
 
 
@@ -247,8 +248,10 @@ def royalroad_text(ch: ExportChapter) -> str:
     for kind, lines in _royalroad_blocks(ch):
         if kind == "break":
             parts.append("* * *")
-        else:
+        elif kind == "system":
             parts.extend(_plain(l) for l in lines)
+        else:
+            parts.append("\n".join(_plain(l) for l in lines))
     return "\n\n".join(parts) + "\n"
 
 
@@ -262,7 +265,7 @@ def royalroad_html(ch: ExportChapter) -> str:
             cell = "<br>".join(_inline(l) for l in lines)
             parts.append(f'<table style="width: 100%;"><tbody><tr><td>{cell}</td></tr></tbody></table>')
         else:
-            parts.append(f"<p>{_inline(lines[0])}</p>")
+            parts.append(f"<p>{'<br>'.join(_inline(l) for l in lines)}</p>")
     return "\n".join(parts)
 
 

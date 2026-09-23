@@ -415,16 +415,17 @@ def test_exportacao_para_o_royal_road(tmp_path):
     proj = _project(tmp_path)
     proj.chapter_dir(1).mkdir(parents=True, exist_ok=True)
     (proj.chapter_dir(1) / "capitulo_final.md").write_text(
-        "Chapter 1: Tuesday\n\nThe alarm went off.\nHe *hated* it.\n\n[System] Build progress: 0%.\n[System] Welcome.\n\n"
-        "* * *\n\nNew scene.", encoding="utf-8")
+        "Chapter 1: Tuesday\n\nThe alarm went off. He *hated* it.\n\n[System] Build progress: 0%.\n[System] Welcome.\n\n"
+        "> help\nCommands: help, status\n\n* * *\n\nNew scene.", encoding="utf-8")
     ch = collect_chapters(proj, 1, 1)[0]
     assert royalroad_title(ch) == "Chapter 1: Tuesday"
     assert royalroad_text(ch) == ("The alarm went off. He hated it.\n\n[System] Build progress: 0%.\n\n[System] Welcome.\n\n"
-                                  "* * *\n\nNew scene.\n")
+                                  "> help\n\nCommands: help, status\n\n* * *\n\nNew scene.\n")
     html = royalroad_html(ch)
     assert html.splitlines() == [
         "<p>The alarm went off. He <em>hated</em> it.</p>",
-        '<table style="width: 100%;"><tbody><tr><td>[System] Build progress: 0%.<br>[System] Welcome.</td></tr></tbody></table>',
+        '<table style="width: 100%;"><tbody><tr><td>[System] Build progress: 0%.<br>[System] Welcome.<br>&gt; help<br>'
+        'Commands: help, status</td></tr></tbody></table>',
         '<p style="text-align: center;">* * *</p>',
         "<p>New scene.</p>",
     ]
