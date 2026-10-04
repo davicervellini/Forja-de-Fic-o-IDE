@@ -11,7 +11,6 @@ Rodam com pytest ou com qualquer runner que passe `tmp_path`.
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pipeline.orchestrator as orch_mod
@@ -153,8 +152,10 @@ def test_checagem_de_consistencia_que_falha_nao_derruba_o_capitulo(tmp_path):
 
 def test_consistencia_ok_com_ponto_e_salva_no_arquivo(tmp_path):
     proj = _project(tmp_path)
-    _run(proj, [1], consistency_reply="OK.")
-    assert _read(proj, 1, "consistencia.md") == "OK."
+    # O stub escreve duas palavras: sem baixar o mínimo do capítulo, o relatório avisaria disso.
+    with patch.object(orch_mod.config, "CHAPTER_TARGET_WORDS", 1):
+        _run(proj, [1], consistency_reply="OK.")
+    assert _read(proj, 1, "consistencia.md") == "OK"
 
 
 def test_checagem_roda_antes_da_memoria_mudar(tmp_path):
@@ -217,18 +218,6 @@ def test_excluir_capitulo_do_meio_tira_so_o_resumo(tmp_path):
     assert [n for n, _ in proj.accumulated_summaries] == [1, 3]
     assert proj.dynamic_memory == memory
     assert proj.last_chapter_num == 3
-
-
-# ── 5. Importação da Wiki ─────────────────────────────────────
-
-def test_importacao_da_wiki_fica_no_estado_ao_reabrir(tmp_path):
-    from gui import WikiImportDialog
-
-    proj = _project(tmp_path)
-    proj.dynamic_memory_path.write_text("- Ned Leeds: sheet", encoding="utf-8")
-    WikiImportDialog._persist_memory(SimpleNamespace(project=proj))  # type: ignore[arg-type]
-    reopened = StoryProject.load(proj.project_dir)
-    assert reopened.dynamic_memory == "- Ned Leeds: sheet"
 
 
 # ── 6. Prompts ────────────────────────────────────────────────

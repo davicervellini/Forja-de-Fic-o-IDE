@@ -47,6 +47,7 @@ class Universe:
     notes: str = ""                # ficha para o autor (seção 9.2)
     allowed_characters: list[str] = field(default_factory=list)
     model_sheet: str = ""          # ficha curta em inglês que vai para o modelo (item da seção 9.5)
+    debut_chapter: int = 0         # capítulo em que o universo entra na história (0 = desde o início)
 
 
 @dataclass
@@ -59,6 +60,14 @@ class Character:
     notes: str = ""
     sheet: str = ""                # ficha curta em inglês que vai para o modelo (item da seção 5.8)
     sheet_label: str = ""          # rótulo em negrito do item na 5.8, se diferente do nome (ex.: 'Tinaia, the central AI.')
+    # Capítulo em que o personagem estreia. Antes dele o modelo nem ouve falar do personagem.
+    # 0 = não informado: vale o que a ficha disser ("from Chapter 205") ou os capítulos já escritos.
+    debut_chapter: int = 0
+    # Como o personagem fala (regras curtas e falas de exemplo), em inglês. Vai no fim do prompt de
+    # cada cena em que ele aparece; sem isso, vale a ficha.
+    voice: str = ""
+    # Retratos: caminhos dentro do projeto ("imagens/alexei.jpeg") ou endereços http(s). Só para o autor.
+    images: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -72,6 +81,7 @@ class Location:
     wiki_page: str = ""            # título da página na wiki
     url: str = ""
     images: list[str] = field(default_factory=list)   # endereços de imagens da wiki, para o autor ver
+    debut_chapter: int = 0         # capítulo em que o local aparece pela primeira vez (0 = desde o início)
 
 
 @dataclass

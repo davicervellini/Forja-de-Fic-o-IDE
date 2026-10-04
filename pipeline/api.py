@@ -46,6 +46,39 @@ def unload_model(model: str):
         logger.warning(f"Não foi possível descarregar o modelo '{model}': {e}")
 
 
+# ── Tamanho do prompt ────────────────────────────────────────
+# Caracteres por token, conservador (texto em português gasta mais tokens por palavra). Ajustado
+# quando o Ollama informa o tamanho exato de um prompt recusado.
+_chars_per_token = 3.2
+# Como terminou a última geração desta thread (para quem chamou saber se parou no limite do contexto).
+_last = threading.local()
+
+
+def estimate_tokens(text: str) -> int:
+    return int(len(text or "") / _chars_per_token) + 1
+
+
+def _learn_ratio(chars: int, tokens: int):
+    global _chars_per_token
+    if chars and tokens:
+        # Só aprende para baixo: superestimar custa memória, subestimar custa o recorte do prompt.
+        _chars_per_token = max(2.5, min(_chars_per_token, chars / tokens * 0.95))
+
+
+def _round_ctx(tokens: int) -> int:
+    return -(-tokens // 1024) * 1024
+
+
+def clear_last():
+    """Esquece como terminou a geração anterior (antes de uma nova chamada, por qualquer provedor)."""
+    _last.done_reason, _last.context_full = "", False
+
+
+def last_stopped_at_context() -> bool:
+    """True quando a última geração desta thread parou porque o contexto encheu (não pela meta)."""
+    return bool(getattr(_last, "context_full", False))
+
+
 class GenerationInterrupted(Exception):
     """Geração interrompida pelo usuário. Contém o fragmento gerado."""
 
@@ -116,6 +149,7 @@ def generate_text(
     cancel_event: threading.Event | None = None,
     extra_options: dict | None = None,
     provider: str = "ollama",
+    json_output: bool = False,
     _retry: bool = True,
 ) -> str:
     """
@@ -133,6 +167,7 @@ def generate_text(
         extra_options: Opções extras do Ollama (ex: {'num_gpu': 28}). Na nuvem só
             `num_predict` vale (vira o teto de tokens); as outras são do Ollama.
         provider: "ollama" ou um provedor de pipeline/providers.py ("anthropic", "google"...).
+        json_output: pede ao Ollama uma resposta em JSON (na nuvem vale só o que o prompt pede).
 
     Returns:
         Texto completo gerado.
@@ -143,6 +178,7 @@ def generate_text(
     """
     if timeout is None:
         timeout = config.REQUEST_TIMEOUT
+    clear_last()
 
     if provider and provider != "ollama":
         from pipeline.providers import ProviderError, generate_cloud, label
@@ -166,6 +202,16 @@ def generate_text(
                 )
         model, provider = fallback, "ollama"
 
+    # O Ollama corta em silêncio o começo do prompt que não cabe no contexto (sistema e registro
+    # somem). Estimativa conservadora de tokens; se não couber com a resposta, aumenta o contexto.
+    # O pedido também vai com truncate/shift desligados: se a estimativa errar para menos, o Ollama
+    # recusa com o tamanho exato do prompt e o contexto cresce na segunda tentativa.
+    num_predict = int((extra_options or {}).get("num_predict") or 1024)
+    needed = estimate_tokens(system_prompt + user_prompt) + num_predict + 256
+    if needed > num_ctx:
+        grown = _round_ctx(needed)
+        logger.warning(f"Prompt de ~{needed} tokens não cabe em num_ctx={num_ctx}; usando {grown}")
+        num_ctx = grown
     options = {
         "temperature": temperature,
         "num_ctx": num_ctx,
@@ -181,11 +227,17 @@ def generate_text(
         # Modelos que raciocinam antes de responder (gemma4, qwen3...) gastariam o teto de tokens
         # pensando e devolveriam o texto vazio. Os outros modelos ignoram o campo.
         "think": False,
+        # Prompt maior que o contexto vira erro em vez de perder o começo (versões antigas ignoram).
+        "truncate": False,
+        "shift": False,
         "options": options,
     }
+    if json_output:
+        payload["format"] = "json"
 
     accumulated_text = ""
     junk = 0
+    _last.done_reason, _last.context_full = "", False
 
     try:
         logger.info(
@@ -205,6 +257,18 @@ def generate_text(
         # Verifica status HTTP
         if response.status_code != 200:
             error_body = response.text
+            if "exceed" in error_body and "context" in error_body:
+                m = re.search(r'n_prompt_tokens\W+(\d+)', error_body)
+                real = int(m.group(1)) if m else needed
+                grown = _round_ctx(real + num_predict + 256)
+                if _retry and grown > num_ctx:
+                    _learn_ratio(len(system_prompt + user_prompt), real)
+                    logger.warning(f"Prompt de {real} tokens não coube em num_ctx={num_ctx}; tentando com {grown}")
+                    return generate_text(model, system_prompt, user_prompt, temperature=temperature,
+                                         num_ctx=grown, timeout=timeout, on_token=on_token,
+                                         cancel_event=cancel_event, extra_options=extra_options,
+                                         provider=provider, json_output=json_output, _retry=False)
+                raise OllamaError(f"O prompt ({real} tokens) não cabe no contexto de {num_ctx} tokens.")
             if "not found" in error_body.lower():
                 raise OllamaError(
                     f"Modelo '{model}' não encontrado. "
@@ -258,11 +322,18 @@ def generate_text(
                 if total_duration and eval_count:
                     duration_sec = total_duration / 1e9
                     tokens_per_sec = eval_count / duration_sec if duration_sec > 0 else 0
+                    prompt_sec = (chunk.get("prompt_eval_duration") or 0) / 1e9
                     logger.info(
                         f"Geração concluída: {eval_count} tokens em "
                         f"{duration_sec:.1f}s ({tokens_per_sec:.1f} tok/s); "
-                        f"prompt: {prompt_eval_count} tokens"
+                        f"prompt: {prompt_eval_count} tokens em {prompt_sec:.1f}s"
                     )
+                _last.done_reason = chunk.get("done_reason", "")
+                _last.context_full = bool(
+                    prompt_eval_count and eval_count and prompt_eval_count + eval_count >= num_ctx - 8
+                )
+                if _last.context_full:
+                    logger.warning(f"A resposta parou no limite do contexto ({num_ctx} tokens).")
                 break
 
         if junk and len(accumulated_text.split()) < 10:
@@ -273,6 +344,9 @@ def generate_text(
         raise  # Re-lança sem embrulhar
 
     except _GarbageOutput:
+        if _last.context_full:
+            # Contexto cheio também devolve 1 token especial: descarregar o modelo não resolve.
+            raise OllamaError(f"O contexto de {num_ctx} tokens encheu antes de o modelo responder.")
         if not _retry:
             raise OllamaError(
                 f"O modelo '{model}' devolveu só tokens especiais (<unused…>) duas vezes seguidas. "
@@ -283,7 +357,7 @@ def generate_text(
         unload_model(model)
         return generate_text(model, system_prompt, user_prompt, temperature=temperature, num_ctx=num_ctx,
                              timeout=timeout, on_token=on_token, cancel_event=cancel_event,
-                             extra_options=extra_options, provider=provider, _retry=False)
+                             extra_options=extra_options, provider=provider, json_output=json_output, _retry=False)
 
     except requests.ConnectionError as e:
         raise OllamaError(

@@ -68,6 +68,7 @@ class StoryProject:
         self.dynamic_memory: str = ""
         self.character_roster: str = ""          # lista viva de personagens
         self.open_threads: str = ""              # threads abertos com idade
+        self.callbacks: str = ""                 # detalhes concretos para retomar (ticket 847, frases)
         self.last_chapter_num: int = 0
 
     # ── Paths derivados ──────────────────────────────────────
@@ -99,6 +100,10 @@ class StoryProject:
     @property
     def open_threads_path(self) -> Path:
         return self.project_dir / "open_threads.md"
+
+    @property
+    def callbacks_path(self) -> Path:
+        return self.project_dir / "callbacks.md"
 
     @property
     def state_path(self) -> Path:
@@ -174,6 +179,7 @@ class StoryProject:
             proj.dynamic_memory = state.get("dynamic_memory", "")
             proj.character_roster = state.get("character_roster", "")
             proj.open_threads = state.get("open_threads", "")
+            proj.callbacks = state.get("callbacks", "")
             proj.last_chapter_num = state.get("last_chapter_num", 0)
         else:
             # Fallback: carrega dos arquivos markdown
@@ -206,6 +212,7 @@ class StoryProject:
             "dynamic_memory": self.dynamic_memory,
             "character_roster": self.character_roster,
             "open_threads": self.open_threads,
+            "callbacks": self.callbacks,
         }
 
     def restore_state(self, snap: dict):
@@ -218,6 +225,7 @@ class StoryProject:
         self.dynamic_memory = snap.get("dynamic_memory", "")
         self.character_roster = snap.get("character_roster", "")
         self.open_threads = snap.get("open_threads", "")
+        self.callbacks = snap.get("callbacks", "")
 
     def save_chapter_snapshot(self, chapter_num: int, snap: dict):
         """Guarda o estado de antes do capítulo na pasta dele."""
@@ -236,6 +244,8 @@ class StoryProject:
         write_file(self.story_so_far_path, self.story_so_far)
         write_file(self.roster_path, self.character_roster)
         write_file(self.open_threads_path, self.open_threads)
+        if self.callbacks or self.callbacks_path.exists():
+            write_file(self.callbacks_path, self.callbacks)
 
         # Atualiza metadados
         self.metadata["last_modified"] = datetime.now().isoformat()
@@ -313,11 +323,16 @@ class StoryProject:
         return entries
 
     def load_akashic_model(self) -> str:
-        """Carrega o Registro Akáshico compilado (versão curta para o LLM)."""
+        """
+        Carrega o Registro Akáshico compilado (versão curta para o LLM). Sem ele, compila agora: o
+        arquivo do autor inteiro não cabe no contexto e o Ollama cortaria o começo em silêncio.
+        """
+        if not self.akashic_model_path.exists() and self.akashic_path.exists():
+            from pipeline.akashic import build_registro_modelo
+            ok, msg = build_registro_modelo(self.project_dir)
+            logger.info(f"registro_modelo.md não existia: {msg}")
         if self.akashic_model_path.exists():
             return read_file(self.akashic_model_path)
-        if self.akashic_path.exists():
-            return read_file(self.akashic_path)
         return ""
 
     def next_chapter_num(self) -> int:
@@ -405,6 +420,7 @@ class StoryProject:
                         "last_chapter": meta.get("last_chapter", 0),
                         "last_modified": meta.get("last_modified", ""),
                         "created": meta.get("created", ""),
+                        "cover": meta.get("cover", ""),
                     })
                 except Exception:
                     results.append({

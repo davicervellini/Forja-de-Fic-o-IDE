@@ -101,6 +101,14 @@ def validate(characters: list[Character], universes: list[Universe],
     return problems
 
 
+def _chapter_number(value) -> int:
+    """Capítulo de estreia vindo da tela (texto, número ou vazio); 0 quando não informado."""
+    try:
+        return max(0, int(str(value).strip() or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def save(project: StoryProject, characters: list[dict], universes: list[dict], structure: str | None = None,
          locations: list[dict] | None = None) -> str:
     """
@@ -118,8 +126,11 @@ def save(project: StoryProject, characters: list[dict], universes: list[dict], s
         unis.append(Universe(**data))
     for c in chars:
         c.name = c.name.strip()
+        c.debut_chapter = _chapter_number(c.debut_chapter)
+        c.voice = (c.voice or "").strip()
     for u in unis:
         u.name = u.name.strip()
+        u.debut_chapter = _chapter_number(u.debut_chapter)
         u.allowed_characters = [a.strip() for a in u.allowed_characters if a.strip()]
     if locations is None:
         locs = list(meta.locations)
@@ -127,6 +138,7 @@ def save(project: StoryProject, characters: list[dict], universes: list[dict], s
         locs = [Location(**{k: v for k, v in loc.items() if k in Location.__dataclass_fields__}) for loc in locations]
         for loc in locs:
             loc.name = loc.name.strip()
+            loc.debut_chapter = _chapter_number(loc.debut_chapter)
             loc.parent = loc.parent.strip()
     problems = validate(chars, unis, locs)
     if problems:
@@ -216,3 +228,64 @@ def overview(project: StoryProject) -> dict:
         "roster_missing": missing,
         "appearances": appearances(project, [c.name for c in chars]),
     }
+
+
+# ── Quem já está na história ─────────────────────────────────
+
+# "visitor from Chapter 205", "created in Chapter 5", "arrives in Chapter 7".
+_DEBUT = re.compile(
+    r"\b(?:from|since|starting (?:in|from)|created in|introduced in|debuts? in|arrives? in|"
+    r"(?:first )?appears? (?:first )?in)\s+(?:the\s+)?chapters?\s+(\d+)",
+    re.I,
+)
+
+
+def debut_of(character: Character) -> int:
+    """Capítulo de estreia: o campo do registro, senão o que a ficha disser. 0 = desconhecido."""
+    if character.debut_chapter:
+        return character.debut_chapter
+    m = _DEBUT.search(character.sheet or "")
+    return int(m.group(1)) if m else 0
+
+
+def _planned_appearances(project: StoryProject, names: list[str], before: int) -> dict[str, list[int]]:
+    """
+    Capítulos concluídos antes de `before` em que o nome aparece no texto E está no elenco da
+    premissa (e não no "não pode aparecer"). Um capítulo ruim, que pôs gente fora da hora, não
+    apresenta ninguém: só conta quem o autor planejou.
+    """
+    from pipeline.premise import from_text as premise_from_text
+    out: dict[str, list[int]] = {n: [] for n in names}
+    for e in project.scan_chapters():
+        if e.num >= before or e.status != "done" or not e.final:
+            continue
+        form = premise_from_text(e.premise)
+        planned = " ".join(form.characters).lower()
+        forbidden = form.must_not.lower()
+        for n in names:
+            first = n.split()[0].lower() if n.split() else n.lower()
+            in_cast = n.lower() in planned or (len(first) >= 4 and first in planned)
+            if in_cast and n.lower() not in forbidden and _mentions(n, e.final):
+                out[n].append(e.num)
+    return out
+
+
+def cast_status(project: StoryProject, num: int, meta: AkashicMeta | None = None) -> tuple[list[str], list[str]]:
+    """
+    (personagens que podem estar no capítulo `num`, os que ainda não). Vale o capítulo de estreia
+    do registro; sem ele, quem já esteve no elenco planejado de um capítulo concluído antes.
+    Protagonistas estão sempre na história.
+    """
+    if meta is None:
+        _, meta = load(project)
+    if not meta:
+        return [], []
+    unknown = [c.name for c in meta.characters if c.role != "protagonist" and not debut_of(c)]
+    seen = _planned_appearances(project, unknown, num) if unknown else {}
+    introduced = []
+    for c in meta.characters:
+        debut = debut_of(c)
+        if c.role == "protagonist" or (debut and debut <= num) or (not debut and seen.get(c.name)):
+            introduced.append(c.name)
+    return introduced, [c.name for c in meta.characters if c.name not in introduced]
+

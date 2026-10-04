@@ -87,11 +87,11 @@ _SPEC: dict[str, tuple[str, object]] = {
     "MODEL_REFINING": ("str", "gemma4:12b"),
     "MODEL_SUMMARIZING": ("str", "gemma4:12b"),
     "DRAFTING_TEMPERATURE": ("float", 0.7),
-    "DRAFTING_NUM_CTX": ("int", 12288),
+    "DRAFTING_NUM_CTX": ("int", 20480),
     "REFINING_TEMPERATURE": ("float", 0.4),
-    "REFINING_NUM_CTX": ("int", 10240),
+    "REFINING_NUM_CTX": ("int", 20480),
     "SUMMARIZING_TEMPERATURE": ("float", 0.2),
-    "SUMMARIZING_NUM_CTX": ("int", 8192),
+    "SUMMARIZING_NUM_CTX": ("int", 20480),
     "DRAFTING_NUM_GPU": ("optint", None),
     "REFINING_NUM_GPU": ("optint", None),
     "SUMMARIZING_NUM_GPU": ("optint", None),
@@ -108,8 +108,15 @@ _SPEC: dict[str, tuple[str, object]] = {
     "DRAFTING_REPEAT_PENALTY": ("float", 1.15),
     "DRAFTING_REPEAT_LAST_N": ("int", 1024),
     "PREVIOUS_CHAPTER_TAIL_WORDS": ("int", 350),
-    "CHAPTER_SO_FAR_TAIL_WORDS": ("int", 700),
-    "REFINE_MIN_RATIO": ("float", 0.7),
+    "CHAPTER_SO_FAR_TAIL_WORDS": ("int", 2400),
+    "REFINE_MIN_RATIO": ("float", 0.85),
+    "REFINE_MAX_RATIO": ("float", 1.15),
+    "DRAFT_CANDIDATES": ("int", 2),
+    "REFINE_CANDIDATES": ("int", 1),
+    "QA_SCENE_RETRIES": ("int", 2),
+    "QA_JUDGE_ENABLED": ("bool", True),
+    "REVISE_PASS_ENABLED": ("bool", True),
+    "PROMPT_BUDGET_TOKENS": ("int", 14000),
     "CONSISTENCY_CHECK_ENABLED": ("bool", True),
     "REQUEST_TIMEOUT": ("int", 3600),
     "CLOUD_FALLBACK": ("bool", True),
@@ -129,6 +136,7 @@ UI_KEYS = [
     "DRAFTING_NUM_GPU", "REFINING_NUM_GPU", "SUMMARIZING_NUM_GPU",
     "CHAPTER_TARGET_WORDS", "CONSISTENCY_CHECK_ENABLED", "REQUEST_TIMEOUT",
     "CLOUD_FALLBACK", "CLOUD_FALLBACK_MODEL", "CLOUD_FALLBACK_MINUTES", "AUTO_NEXT_PREMISE",
+    "DRAFT_CANDIDATES", "REFINE_CANDIDATES", "QA_SCENE_RETRIES", "QA_JUDGE_ENABLED", "REVISE_PASS_ENABLED",
 ]
 
 
@@ -223,8 +231,8 @@ DYNAMIC_MEMORY_MAX_WORDS: int = _values["DYNAMIC_MEMORY_MAX_WORDS"]
 ROSTER_MAX_CHARS: int = _values["ROSTER_MAX_CHARS"]
 OPEN_THREADS_MAX: int = _values["OPEN_THREADS_MAX"]
 # ── Geração cena por cena ────────────────────────────────────
-# Meta do capítulo inteiro; cada cena recebe a meta dela na premissa ("about 400 words")
-# ou uma parte igual desta.
+# Mínimo de palavras do capítulo. Cada cena recebe a meta dela na premissa ("about 400 words")
+# ou uma parte igual desta; se o capítulo ficar atrás do mínimo, as cenas seguintes são continuadas.
 CHAPTER_TARGET_WORDS: int = _values["CHAPTER_TARGET_WORDS"]
 # Cena abaixo desta fração da meta ganha pedidos de continuação, até SCENE_MAX_CONTINUATIONS.
 SCENE_MIN_RATIO: float = _values["SCENE_MIN_RATIO"]
@@ -238,6 +246,22 @@ PREVIOUS_CHAPTER_TAIL_WORDS: int = _values["PREVIOUS_CHAPTER_TAIL_WORDS"]
 CHAPTER_SO_FAR_TAIL_WORDS: int = _values["CHAPTER_SO_FAR_TAIL_WORDS"]
 # Polimento que encolher a cena abaixo desta fração é descartado (fica o rascunho).
 REFINE_MIN_RATIO: float = _values["REFINE_MIN_RATIO"]
+# Polimento que crescer a cena acima desta fração também é descartado (o modelo inventou coisa).
+REFINE_MAX_RATIO: float = _values["REFINE_MAX_RATIO"]
+# Versões de cada cena escritas com o mesmo prompt; fica a de melhor nota (checagens automáticas
+# e, com duas ou mais, um juiz). Com o prompt em cache, cada versão extra custa só a geração.
+DRAFT_CANDIDATES: int = _values["DRAFT_CANDIDATES"]
+REFINE_CANDIDATES: int = _values["REFINE_CANDIDATES"]
+# Cena que falha na conferência da premissa (item obrigatório faltando, algo proibido) é reescrita até N vezes.
+QA_SCENE_RETRIES: int = _values["QA_SCENE_RETRIES"]
+# Conferência com o modelo (além das checagens sem modelo): itens da premissa, proibições, cânone.
+QA_JUDGE_ENABLED: bool = _values["QA_JUDGE_ENABLED"]
+# Antes do polimento de linha: o modelo aponta contradições, repetições e erros de sentido da cena,
+# com citação exata, e reescreve só as frases citadas.
+REVISE_PASS_ENABLED: bool = _values["REVISE_PASS_ENABLED"]
+# Teto do prompt de cena (tokens estimados). Acima dele, a memória é cortada na ordem do menos
+# importante para o mais importante; o cânone do capítulo, a premissa e a tarefa nunca saem.
+PROMPT_BUDGET_TOKENS: int = _values["PROMPT_BUDGET_TOKENS"]
 CONSISTENCY_CHECK_ENABLED: bool = _values["CONSISTENCY_CHECK_ENABLED"]
 REQUEST_TIMEOUT: int = _values["REQUEST_TIMEOUT"]
 # Reserva local: quando um provedor na nuvem esgota o limite de uso ou para de responder, a

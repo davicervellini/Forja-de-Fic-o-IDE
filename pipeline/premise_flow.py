@@ -25,14 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 def cast_so_far(project: StoryProject, num: int) -> tuple[list[str], list[str]]:
-    """(personagens que já apareceram antes deste capítulo ou são protagonistas, os que ainda não)."""
-    _, meta = cast.load(project)
-    if not meta:
-        return [], []
-    seen = cast.appearances(project, [c.name for c in meta.characters])
-    introduced = [c.name for c in meta.characters
-                  if c.role == "protagonist" or any(n < num for n in seen.get(c.name, []))]
-    return introduced, [c.name for c in meta.characters if c.name not in introduced]
+    """(personagens que podem estar no capítulo `num`, os que ainda não). Ver cast.cast_status."""
+    return cast.cast_status(project, num)
 
 
 def premise_context(project: StoryProject, num: int) -> dict:
@@ -169,3 +163,45 @@ def approve(project: StoryProject, num: int):
 
 def pending_approval(project: StoryProject, num: int) -> bool:
     return bool(ch.read_info(project, num).get("premise_pending"))
+
+
+# ── Memória no idioma do usuário, só para ler ─────────────────
+
+STATE_FIELDS = ("dynamic_memory", "character_roster", "open_threads", "callbacks", "story_so_far")
+TRANSLATION_CACHE = "memoria_traduzida.json"
+
+
+def translate_state_for_reading(project: StoryProject, cancel_event: threading.Event | None = None,
+                                on_status: Callable[[str], None] | None = None) -> dict:
+    """
+    A memória da história fica no idioma da história (é o que o modelo lê). Para a pessoa ler no
+    idioma dela, cada campo é traduzido e guardado em memoria_traduzida.json, pelo conteúdo: a
+    tradução nunca volta para os prompts. Retorna {campo: texto traduzido, "summaries": [...]}.
+    """
+    import hashlib
+    import json
+    from pipeline.io_utils import write_file
+    code = notes_language()
+    path = project.project_dir / TRANSLATION_CACHE
+    try:
+        cache = json.loads(read_file(path)) if path.exists() else {}
+    except ValueError:
+        cache = {}
+
+    def tr(text: str) -> str:
+        if not text.strip() or not wrong_language(text, code):
+            return text
+        key = f"{code}:{hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]}"
+        if key not in cache:
+            cache[key] = _translate(text, code, cancel_event)
+        return cache[key]
+
+    out: dict = {}
+    for name in STATE_FIELDS:
+        if on_status:
+            on_status(f"Traduzindo para ler: {name}")
+        out[name] = tr(getattr(project, name, "") or "")
+    out["summaries"] = [{"num": n, "text": tr(t)} for n, t in project.accumulated_summaries]
+    write_file(path, json.dumps(cache, ensure_ascii=False, indent=1))
+    return out
+

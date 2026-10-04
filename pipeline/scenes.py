@@ -64,12 +64,35 @@ def count_words(text: str) -> int:
 
 
 def tail_words(text: str, n: int) -> str:
-    """Últimas `n` palavras do texto, começando num início de parágrafo quando possível."""
-    words = (text or "").split()
-    if len(words) <= n:
-        return (text or "").strip()
-    tail = " ".join(words[-n:])
-    return "… " + tail
+    """
+    Fim do texto com pelo menos `n` palavras, em parágrafos inteiros e com as quebras de linha:
+    o ritmo dos parágrafos e as linhas de terminal ([System], "> comando") são o melhor exemplo
+    de formato que o modelo vê. Só o primeiro parágrafo pode vir cortado, se for enorme.
+    """
+    text = (text or "").strip()
+    if count_words(text) <= n:
+        return text
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    kept: list[str] = []
+    total = 0
+    for para in reversed(paras):
+        if total >= n:
+            break
+        words = para.split()
+        if total + len(words) > n * 1.5 and kept:
+            # Parágrafo enorme: entra só o fim dele, a partir de um começo de frase.
+            need = n - total
+            if need <= 0:
+                break
+            cut = " ".join(words[-need:])
+            m = re.search(r"(?<=[.!?…])\s+(?=\S)", cut)
+            kept.append("… " + (cut[m.end():] if m and m.end() < len(cut) else cut))
+            total += need
+            break
+        kept.append(para)
+        total += len(words)
+    out = "\n\n".join(reversed(kept))
+    return out if out.startswith("…") or len(kept) == len(paras) else "… " + out
 
 
 def parse_premise(premise: str) -> PremisePlan:
@@ -119,13 +142,16 @@ def parse_premise(premise: str) -> PremisePlan:
 
 
 def clean_scene(text: str) -> str:
-    """Tira título, cabeçalho de cena e separadores que o modelo às vezes põe no começo ou no fim."""
+    """
+    Tira título, cabeçalho de cena e separadores que o modelo às vezes põe no começo ou no fim,
+    e as linhas em que ele comenta a cena ("This scene will continue…").
+    """
     lines = (text or "").strip().splitlines()
     while lines and (not lines[0].strip() or _LEADING_JUNK.match(lines[0])):
         lines.pop(0)
     while lines and (not lines[-1].strip() or _BREAK_LINE.match(lines[-1])):
         lines.pop()
-    return "\n".join(lines).strip()
+    return drop_meta_lines("\n".join(lines))
 
 
 def assemble_chapter(title: str | None, scenes: list[str], scene_break: str = SCENE_BREAK) -> str:
@@ -295,8 +321,282 @@ def last_sentence(text: str) -> str:
     return sents[-1].strip() if sents else paras[-1]
 
 
+def last_prose_sentence(text: str) -> str:
+    """
+    Última frase de narração: pula linhas [System] e "> comando" no fim do texto. Citar a linha
+    do Sistema como "última frase" faz o modelo reimprimi-la no começo da cena seguinte.
+    """
+    paras = [p for p in paragraphs(text) if not re.match(r"^\s*(?:\[System\]|>)", p)]
+    while paras:
+        para = re.sub(r"[\"“'‘]?\[System\][^\n]*$", "", paras[-1]).strip()
+        if para and not para.endswith(":"):
+            sents = _sentences(para)
+            return sents[-1].strip() if sents else para
+        if para:
+            # Frase que termina em ":" anuncia a linha do Sistema; a anterior é um ponto de partida melhor.
+            sents = _sentences(para)
+            return (sents[-2] if len(sents) > 1 else sents[-1] if sents else para).strip()
+        paras.pop()
+    return ""
+
+
+def trim_next_scene_leak(text: str, next_brief: str, min_words: int, threshold: float = 0.2) -> str:
+    """
+    Corta do fim da cena os parágrafos que já contam a cena seguinte (parecidos com a descrição
+    dela), desde que a cena não fique abaixo de `min_words`.
+    """
+    if not next_brief.strip():
+        return text
+    paras = paragraphs(text)
+    cut = None
+    for k in range(max(0, len(paras) - 3), len(paras)):
+        if count_words(paras[k]) >= 12 and similarity(paras[k], next_brief) >= threshold:
+            cut = k
+            break
+    if cut is None or count_words("\n\n".join(paras[:cut])) < min_words:
+        return text
+    return "\n\n".join(paras[:cut])
+
+
+def trim_after_hook(text: str, hook_end: str, max_share: float = 0.25, threshold: float = 0.2) -> str:
+    """
+    Última cena: tira o comentário depois da imagem final do gancho (reflexão, resumo, "e então,
+    nada"), se for curto. O capítulo seguinte começa exatamente nessa imagem.
+    """
+    if not hook_end.strip():
+        return text
+    paras = paragraphs(text)
+    hit = None
+    for k in range(len(paras) - 1, -1, -1):
+        if similarity(paras[k], hook_end) >= threshold:
+            hit = k
+            break
+    if hit is None or hit == len(paras) - 1:
+        return text
+    tail = count_words("\n\n".join(paras[hit + 1:]))
+    if tail > count_words(text) * max_share:
+        return text
+    return "\n\n".join(paras[:hit + 1])
+
+
+def system_spans(text: str) -> set[str]:
+    """Mensagens [System] e comandos "> x" do texto, normalizados (aspas, espaços, ponto final)."""
+    def norm(s: str) -> str:
+        return re.sub(r"[\s\"'“”‘’.]+", " ", s).strip().casefold()
+    spans = {norm(m) for m in re.findall(r"\[System\][^\n\"”’]*", text or "")}
+    spans |= {norm(m) for m in re.findall(r"(?m)^\s*>\s*\S[^\n]*", text or "")}
+    return {s for s in spans if s}
+
+
+def lost_system_spans(polished: str, draft: str) -> list[str]:
+    """Linhas [System] e comandos do rascunho que sumiram no polimento."""
+    have = system_spans(polished)
+    return sorted(s for s in system_spans(draft) if s not in have)
+
+
+def fix_capitalized_names(polished: str, draft: str, names: list[str]) -> tuple[str, list[str]]:
+    """
+    Desfaz a maiúscula que o polimento pôs numa palavra comum para casar com um nome do registro
+    ("the heart of the city" → "the Heart of the city"), quando o rascunho tinha a palavra em
+    minúscula. Começo de frase fica como está. Retorna (texto, nomes corrigidos).
+    """
+    fixed = []
+    for name in names:
+        core = re.sub(r"^the\s+", "", name, flags=re.I)
+        if not core or core.lower() == core or " " in core:
+            continue
+        if re.search(rf"(?<!\w){re.escape(core)}(?!\w)", draft):
+            continue  # o rascunho já usava o nome
+        if not re.search(rf"(?<!\w){re.escape(core.lower())}(?!\w)", draft):
+            continue  # nem a palavra comum estava lá: é nome novo, e o guarda trata
+
+        def lower(m: re.Match) -> str:
+            before = polished[:m.start()].rstrip()
+            if not before or before[-1] in ".!?…\"“":
+                return m.group(0)
+            return m.group(0).lower()
+        new = re.sub(rf"(?<!\w){re.escape(core)}(?!\w)", lower, polished)
+        if new != polished:
+            polished = new
+            fixed.append(name)
+    return polished, fixed
+
+
+def revert_paragraphs(polished: str, draft: str, bad, min_sim: float = 0.3) -> tuple[str, int]:
+    """
+    Troca pelo parágrafo correspondente do rascunho cada parágrafo do polimento em que `bad(p)` é
+    verdade (nome proibido, gente inventada), e devolve ao texto os parágrafos do rascunho com
+    [System] ou comando que sumiram. Retorna (texto, parágrafos trocados); -1 quando um parágrafo
+    ruim não tem par no rascunho (aí a cena inteira volta ao rascunho).
+    """
+    dparas = paragraphs(draft)
+    pparas = paragraphs(polished)
+    changed = 0
+    for k, p in enumerate(pparas):
+        if not bad(p):
+            continue
+        best = max(dparas, key=lambda d: similarity(p, d), default="")
+        if not best or similarity(p, best) < min_sim:
+            return polished, -1
+        pparas[k] = best
+        changed += 1
+    for span in lost_system_spans("\n\n".join(pparas), draft):
+        j = next((j for j, d in enumerate(dparas) if span in system_spans(d)), None)
+        if j is None:
+            return polished, -1
+        src = dparas[j]
+        if re.match(r"^\s*(?:\[System\]|>)", src):
+            # Linha própria: volta logo depois do parágrafo que a antecedia no rascunho.
+            if j == 0:
+                pparas.insert(0, src)
+            else:
+                k = max(range(len(pparas)), key=lambda i: similarity(pparas[i], dparas[j - 1]), default=None)
+                if k is None or similarity(pparas[k], dparas[j - 1]) < min_sim:
+                    return polished, -1
+                pparas.insert(k + 1, src)
+        else:
+            k = max(range(len(pparas)), key=lambda i: similarity(pparas[i], src), default=None)
+            if k is None or similarity(pparas[k], src) < min_sim:
+                return polished, -1
+            pparas[k] = src
+        changed += 1
+    return "\n\n".join(pparas), changed
+
+
+_QUOTE = re.compile(r"[\"“]([^\"”]{8,160})[\"”]")
+
+
+def voice_samples(texts: list[str], name: str, n: int = 4) -> list[str]:
+    """
+    Falas curtas e reais do personagem nos capítulos já escritos (do mais recente para o mais
+    antigo): trechos entre aspas em parágrafos que citam o nome dele, ou em que ele é o único
+    nome. Escolhidas para variar: tamanhos diferentes, sem repetir o começo.
+    """
+    first = (name or "").split()[0] if (name or "").split() else ""
+    if not first:
+        return []
+    found: list[str] = []
+    for text in texts:
+        for para in paragraphs(text):
+            if not re.search(rf"\b{re.escape(first)}\b", para):
+                continue
+            for m in _QUOTE.finditer(para):
+                line = m.group(1).strip()
+                words = count_words(line)
+                if 3 <= words <= 22 and not line.startswith("[") and line not in found:
+                    found.append(line)
+    picked: list[str] = []
+    for line in sorted(found, key=lambda l: (-len(set(_words_set(l))), l))[:n * 4]:
+        if any(similarity(line, p) > 0.3 or line.split()[0] == p.split()[0] for p in picked):
+            continue
+        picked.append(line)
+        if len(picked) >= n:
+            break
+    return picked
+
+
 def drop_new_system_lines(edited: str, original: str) -> str:
     """Remove linhas [System] que o polimento inventou (as que não existiam no rascunho)."""
-    allowed = {l.strip() for l in original.splitlines() if l.strip().startswith("[System]")}
-    kept = [l for l in edited.splitlines() if not (l.strip().startswith("[System]") and l.strip() not in allowed)]
+    # O rascunho às vezes traz a caixa no meio da frase; o polimento pode movê-la para linha própria.
+    def norm(s: str) -> str:
+        return re.sub(r"[\s\"'“”‘’.]+", " ", s).strip().casefold()
+    allowed = {norm(m) for m in re.findall(r"\[System\][^\n\"”’]*", original)}
+    kept = [l for l in edited.splitlines() if not (l.strip().startswith("[System]") and norm(l) not in allowed)]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
+# ── Desvios do polimento ─────────────────────────────────────
+# Modelos de narração (os de roleplay principalmente) às vezes saem do texto: trazem para a cena
+# gente do registro que não estava lá, trocam a prosa por formato de roteiro ("Nome: fala"),
+# comentam a cena ("This scene will continue…") ou entram em laço. O polimento que faz isso é
+# descartado e fica o rascunho da cena.
+
+_META_LINE = re.compile(
+    r"^\s*[\(\[]?\s*(?:this|the) scene (?:will|continues|ends|is)\b|"
+    r"^\s*[\(\[]?\s*(?:end of (?:the )?(?:scene|chapter)|to be continued|in the next (?:scene|chapter)|"
+    r"\(?\s*(?:author'?s? )?note\s*:)",
+    re.I,
+)
+_SCRIPT_LINE = re.compile(r"^\s*[A-ZÀ-Ý][\w'’.\-]*(?: [A-ZÀ-Ý][\w'’.\-]*){0,3}\s*:\s*\S")
+_CAPITALIZED = re.compile(r"(?<![.!?…\"“'‘:\n])\s([A-ZÀ-Ý][a-zà-ÿ'’]+(?:[-][A-ZÀ-Ý][a-zà-ÿ]+)?)\b")
+
+
+def drop_meta_lines(text: str) -> str:
+    """Tira as linhas em que o modelo comenta a cena em vez de escrevê-la."""
+    kept = [l for l in (text or "").splitlines() if not _META_LINE.match(l)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
+def official_names(akashic_text: str) -> list[str]:
+    """Nomes próprios da seção "Official spellings" do registro (pessoas, lugares, termos com maiúscula)."""
+    m = re.search(r"^#+\s*[\d.]*\s*Official spellings.*?$(.*?)(?=^#|\Z)", akashic_text or "", re.M | re.S | re.I)
+    if not m:
+        return []
+    names: list[str] = []
+    for line in m.group(1).splitlines():
+        if ":" not in line:
+            continue
+        for item in line.split(":", 1)[1].split(";"):
+            item = item.strip().rstrip(".")
+            if item and not item.startswith("[") and re.search(r"[A-ZÀ-Ý]", item) and item not in names:
+                names.append(item)
+    return names
+
+
+def _name_pattern(name: str) -> re.Pattern:
+    if name.lower().startswith("the "):
+        return re.compile(r"\b[Tt]he " + re.escape(name[4:]) + r"\b")
+    return re.compile(r"\b" + re.escape(name) + r"\b")
+
+
+def new_registry_names(polished: str, allowed: str, names: list[str]) -> list[str]:
+    """Nomes do registro que aparecem no polimento e não estão no rascunho nem na premissa."""
+    return [n for n in names if _name_pattern(n).search(polished) and not _name_pattern(n).search(allowed)]
+
+
+def new_proper_nouns(polished: str, allowed: str) -> list[str]:
+    """Palavras com maiúscula no meio da frase que o texto de origem não tem (gente inventada)."""
+    known = {re.sub(r"['’]s$", "", w) for w in _words_set(allowed)}
+    found: list[str] = []
+    for w in _CAPITALIZED.findall(polished or ""):
+        w = re.sub(r"['’]s$", "", w)
+        if "'" in w or "’" in w:  # contrações: I'm, Don't
+            continue
+        if w.lower() not in known and w not in found:
+            found.append(w)
+    return found
+
+
+def refine_problems(polished: str, draft: str, premise: str = "", names: list[str] | None = None,
+                    max_ratio: float = 1.25, forbidden: list[str] | None = None) -> list[str]:
+    """
+    Motivos para descartar o polimento de uma cena; lista vazia quando está tudo certo.
+    `premise`: o que a premissa permite (sem o "não pode aparecer"). `forbidden`: nomes que a
+    premissa proíbe; o polimento que os traz é recusado mesmo que estejam no texto da premissa.
+    """
+    problems: list[str] = []
+    allowed = f"{draft}\n{premise}"
+    before, after = count_words(draft), count_words(polished)
+    if before and after > before * max_ratio:
+        problems.append(f"cresceu demais ({before} → {after} palavras)")
+    banned = [n for n in (forbidden or []) if _name_pattern(n).search(polished) and not _name_pattern(n).search(draft)]
+    if banned:
+        problems.append("trouxe o que a premissa proíbe: " + ", ".join(banned))
+    invented = [n for n in new_registry_names(polished, allowed, names or []) if n not in banned]
+    if invented:
+        problems.append("trouxe do registro quem não estava na cena: " + ", ".join(invented))
+    lost_lines = lost_system_spans(polished, draft)
+    if lost_lines:
+        problems.append(f"perdeu {len(lost_lines)} linha(s) [System] ou comando")
+    strangers = new_proper_nouns(polished, allowed)
+    if len(strangers) >= 2:
+        problems.append("inventou nomes: " + ", ".join(strangers[:6]))
+    script = sum(bool(_SCRIPT_LINE.match(l)) and not l.lstrip().startswith("[") for l in polished.splitlines())
+    if script > sum(bool(_SCRIPT_LINE.match(l)) for l in draft.splitlines()) + 1:
+        problems.append(f"virou roteiro ({script} linhas \"Nome: fala\")")
+    if any(_META_LINE.match(l) for l in polished.splitlines()):
+        problems.append("comentou a cena em vez de escrevê-la")
+    lost = after - count_words(remove_repetition(polished, min_words=3))
+    if after and lost > after * 0.1:
+        problems.append(f"entrou em laço ({lost} palavras repetidas)")
+    return problems

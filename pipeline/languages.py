@@ -62,6 +62,17 @@ def story_rule(code: str) -> str:
             f"any idea you take from them. Keep proper names and [System] lines as they are.")
 
 
+def state_rule(code: str) -> str:
+    """
+    Última linha dos pedidos que escrevem o que o modelo vai ler de novo (resumos, memória,
+    roster, threads): no idioma da história. Passar a memória pelo idioma do usuário a cada
+    capítulo traduz nomes oficiais e muda o sentido dos fatos.
+    """
+    name = english_name(code)
+    return (f"LANGUAGE: write in {name}, the language of the story. Use the official spellings and proper "
+            f"names exactly as written in the records, and keep field labels and section headers in English.")
+
+
 CHAPTER_WORD = {"en": "Chapter", "pt-BR": "Capítulo", "es": "Capítulo", "fr": "Chapitre", "de": "Kapitel",
                 "it": "Capitolo", "ja": "Chapter"}
 

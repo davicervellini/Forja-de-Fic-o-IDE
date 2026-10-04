@@ -29,11 +29,16 @@ Must include: the cold.
 Must not appear: nobody else."""
 
 
+_CALLS = [0]
+
+
 def _stub(model, system_prompt, user_prompt, **kw):
     if system_prompt.startswith(P.SYSTEM_PREMISE_WRITER):
         return SUGGESTION
     if system_prompt == prompts.SYSTEM_DRAFTING:
-        return " ".join(f"W{i}." for i in range(300))
+        # Palavras novas a cada chamada: texto repetido seria (corretamente) apontado como laço.
+        _CALLS[0] += 1
+        return " ".join(f"W{_CALLS[0]}x{i}." for i in range(300))
     if system_prompt == prompts.SYSTEM_UPDATING:
         return "=== DYNAMIC MEMORY ===\nm\n=== CHARACTER ROSTER ===\nr\n=== OPEN THREADS ===\nt"
     return "OK." if system_prompt == prompts.SYSTEM_CONSISTENCY else "text"

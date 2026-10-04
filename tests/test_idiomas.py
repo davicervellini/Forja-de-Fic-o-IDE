@@ -55,11 +55,13 @@ def test_cada_fase_recebe_o_idioma_certo(tmp_path):
     with patch.object(config, "UI_LANGUAGE", "pt-BR"), patch.object(orch_mod, "generate_text", stub):
         result = PipelineOrchestrator(project=proj).run_single(premise, 1)
     assert result.status == "done", result.error
-    story, notes = L.story_rule("en"), L.notes_rule("pt-BR")
+    story, state, notes = L.story_rule("en"), L.state_rule("en"), L.notes_rule("pt-BR")
     for system in (prompts.SYSTEM_DRAFTING, prompts.SYSTEM_REFINING):
         assert all(p.rstrip().endswith(story) for p in seen[system]), system[:40]
-    for system in (prompts.SYSTEM_SUMMARIZING, prompts.SYSTEM_UPDATING, prompts.SYSTEM_CONSISTENCY):
-        assert all(p.rstrip().endswith(notes) for p in seen[system]), system[:40]
+    # O que o modelo lê de novo (resumo, memória) fica no idioma da história; o relatório, no do usuário.
+    for system in (prompts.SYSTEM_SUMMARIZING, prompts.SYSTEM_UPDATING):
+        assert all(p.rstrip().endswith(state) for p in seen[system]), system[:40]
+    assert all(p.rstrip().endswith(notes) for p in seen[prompts.SYSTEM_CONSISTENCY])
     # O título segue o idioma da história, não o da premissa.
     final = (proj.chapter_dir(1) / "capitulo_final.md").read_text(encoding="utf-8")
     assert final.startswith("Chapter 1: Terça")

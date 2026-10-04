@@ -30,6 +30,9 @@ VERSIONED_FILES = (
     "cenas_planejadas.md",
     "polimento_descartado.md",
     "consistencia.md",
+    "canon_modelo.md",
+    "critica.md",
+    "memoria_diff.md",
 )
 
 REASON_LABELS = {

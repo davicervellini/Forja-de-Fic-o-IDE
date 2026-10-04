@@ -192,7 +192,8 @@ Hook: how the chapter ends.
 Must include: concrete things that must appear (for example, one [System] line).
 Must not appear: characters, places, objects or facts that must not appear yet, and anything that would contradict the records or previous chapters.
 
-Rules: 3 or 4 scenes. The scene word counts add up to the requested length. Follow the story plan \
+Rules: as many scenes as the chapter needs (usually 2 to 6). The scene word counts add up to at least the \
+requested minimum length; a chapter with more happening can be longer. Follow the story plan \
 for this chapter when there is one. Never contradict the AKASHIC RECORDS or what already happened. \
 Invent nothing the records forbid.\
 """
@@ -241,7 +242,7 @@ def _context(akashic: str, outline: dict | None, previous_tail: str, story_so_fa
 
 def build_suggest_prompt(chapter_num: int, target_words: int, notes: str = "", **ctx) -> str:
     parts = _context(**ctx)
-    task = [f"=== TASK ===", f"Write the premise of Chapter {chapter_num}. Total length: about {target_words} words."]
+    task = [f"=== TASK ===", f"Write the premise of Chapter {chapter_num}. Minimum length: {target_words} words."]
     if chapter_num == 1:
         task.append("This is the first chapter.")
     if notes.strip():
@@ -359,11 +360,21 @@ def enforce_cast(form: PremiseForm, not_introduced: list[str], outline: dict | N
 # ── Uso no pipeline ─────────────────────────────────────────
 
 def chapter_guidance(form: PremiseForm, sheets: dict[str, str], first_scene: bool,
-                     places: dict[str, str] | None = None, always: list[str] | None = None) -> str:
+                     places: dict[str, str] | None = None, always: list[str] | None = None,
+                     scene_text: str | None = None, has_previous: bool = False,
+                     must_here: list[str] | None = None, done_before: list[str] | None = None,
+                     parents: dict[str, str] | None = None) -> str:
     """
     Linhas extras para o fim do prompt de cada cena, tiradas da premissa guiada: quem está em
-    cena (com a ficha de cada um), a abertura (só na primeira cena) e o que precisa e o que não
-    pode aparecer. Modelos pequenos obedecem mais ao que leem por último.
+    cena (com a ficha de quem tiver ficha em `sheets`), os locais desta cena, a abertura (só na
+    primeira cena) e o que precisa e o que não pode aparecer. Modelos pequenos obedecem mais ao
+    que leem por último.
+
+    `scene_text`: descrição desta cena; com ela, só vão as fichas dos locais citados nela (mais os
+    "sempre no contexto" e os que contêm esses locais, de `parents`). `has_previous`: há um
+    capítulo anterior, e a abertura vira só a situação de partida, que não se repete.
+    `must_here`: itens obrigatórios desta cena; `done_before`: os das cenas anteriores. Sem
+    `must_here`, vai a lista inteira do capítulo.
     """
     lines = []
     if form.characters:
@@ -373,18 +384,34 @@ def chapter_guidance(form: PremiseForm, sheets: dict[str, str], first_scene: boo
             cast.append(f"{name}: {sheet}" if sheet else name)
         lines.append("Characters in this chapter (no other named character appears): " + " | ".join(cast))
     places = places or {}
-    wanted = list(dict.fromkeys((always or []) + form.locations))
+    if scene_text is None:
+        wanted = list(dict.fromkeys((always or []) + form.locations))
+    else:
+        here = [n for n in places if re.search(rf"(?<!\w){re.escape(n)}(?!\w)", scene_text, re.I)]
+        up = [parents[n] for n in here if parents and parents.get(n)]
+        wanted = list(dict.fromkeys((always or []) + up + here))
     described = []
     for name in wanted:
         sheet = next((s for n, s in places.items() if n.lower() == name.lower()), "")
         if sheet:
             described.append(f"{name}: {sheet}")
     if described:
-        lines.append("Canon places in this chapter. Follow their layout exactly and never add what they say is "
+        lines.append("Canon places in this scene. Follow their layout exactly and never add what they say is "
                      "not there: " + " | ".join(described))
     if first_scene and form.opening:
-        lines.append(f"The chapter opens like this: {form.opening}")
-    if form.must_include:
+        if has_previous:
+            opening = re.sub(r"[\"“'‘]?\[System\][^\"”'’\n]*[\"”'’]?", "", form.opening).strip()
+            lines.append("Situation at the start (already narrated at the end of the previous chapter; do not "
+                         f"repeat or quote it): {opening}")
+        else:
+            lines.append(f"The chapter opens like this: {form.opening}")
+    if must_here is not None:
+        if must_here:
+            lines.append("Must show in THIS scene (all of them, in your own words):\n"
+                         + "\n".join(f"- {m}" for m in must_here))
+        if done_before:
+            lines.append("Already shown earlier in this chapter (do not show again): " + "; ".join(done_before))
+    elif form.must_include:
         lines.append(f"Somewhere in the chapter, include: {form.must_include}")
     if form.must_not:
         lines.append(f"Must NOT appear anywhere: {form.must_not}")

@@ -125,7 +125,7 @@ def test_ficha_do_local_usa_a_pagina_exata_e_a_epoca(tmp_path):
 
 
 def test_premissa_e_prompt_de_cena_levam_os_locais(tmp_path):
-    form = P.PremiseForm(title="X", locations=["Chair room"], scenes=[{"text": "He sits.", "words": 400},
+    form = P.PremiseForm(title="X", locations=["Chair room"], scenes=[{"text": "He sits in the Chair room.", "words": 400},
                                                                     {"text": "He stands.", "words": 400}])
     text = P.to_text(form, 2)
     assert "Locations in scene: Chair room" in text and P.from_text(text).locations == ["Chair room"]
@@ -154,7 +154,10 @@ def test_premissa_e_prompt_de_cena_levam_os_locais(tmp_path):
 
     with patch.object(orch_mod, "generate_text", stub):
         assert PipelineOrchestrator(project=proj).run_single(text, 1).status == "done"
-    assert seen and all("Chair room: Top of the east tower." in p and "Atlantis: City. Never: Wraith." in p for p in seen)
+    # Ficha do local só na cena que o cita (mais os "sempre no contexto" e quem contém o local).
+    tasks = [p.split("=== YOUR TASK ===")[1] for p in seen]
+    assert all("Atlantis: City. Never: Wraith." in t for t in tasks)
+    assert "Chair room: Top of the east tower." in tasks[0] and "Chair room: Top" not in tasks[-1]
     assert all("Jumper bay" not in p for p in seen)
 
 

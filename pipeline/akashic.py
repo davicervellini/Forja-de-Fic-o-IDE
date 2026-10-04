@@ -58,9 +58,37 @@ def extract_section(text: str, prefix: str) -> str:
 
 
 def extract_style_block(akashic_records: str) -> str:
-    """Guia de estilo, grafias oficiais e lista de proibições, para o polimento."""
-    parts = [s for s in (extract_section(akashic_records, p) for p in STYLE_SECTION_PREFIXES) if s]
+    """
+    Guia de estilo, grafias oficiais e lista de proibições, para o polimento. No registro_modelo a
+    13.2 vem logo depois da seção 10, sem o '## 13.' em volta, e extract_section('## 10. ') já a
+    inclui: a seção que já está dentro de uma anterior não entra de novo.
+    """
+    parts: list[str] = []
+    for p in STYLE_SECTION_PREFIXES:
+        s = extract_section(akashic_records, p)
+        if s and not any(s in earlier for earlier in parts):
+            parts.append(s)
     return "\n\n".join(parts)
+
+
+def spellings_for(style_block: str, text: str) -> str:
+    """
+    Reduz a lista de grafias oficiais aos nomes que aparecem no texto. Com a lista inteira, o
+    polimento de uma cena recebe dezenas de personagens e lugares da história toda, e modelos de
+    narração tendem a pôr na cena quem só estava na lista. O nome conta só com a grafia do
+    registro, maiúscula inclusive: "the heart of the city" não puxa "the Heart".
+    """
+    from pipeline.canon import filter_spellings
+    out: list[str] = []
+    in_spellings = False
+    for line in style_block.splitlines():
+        if line.startswith("#"):
+            in_spellings = "official spellings" in line.lower()
+        elif in_spellings:
+            out.extend(filter_spellings([line], text, [], []))
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def build_registro_modelo(project_dir: str | Path) -> tuple[bool, str]:
@@ -100,6 +128,21 @@ def build_registro_modelo(project_dir: str | Path) -> tuple[bool, str]:
         bloco = [l for l in secao.splitlines() if not l.startswith("Nota:")]
         partes.extend(bloco)
         partes.append("")
+
+    # Seções em inglês fora da lista fixa ("(EN)" no título): cartões de arco, amostra de voz,
+    # glossário, interface do Sistema. O que é para o modelo leva "(EN)" no título, por convenção.
+    incluidas = "\n".join(partes)
+    for linha in linhas:
+        m = re.match(r"^(#{2,4}) (.*\(EN\))\s*$", linha)
+        if not m or linha in incluidas:
+            continue
+        secao = extract_section(texto_fonte, linha)
+        if secao and secao not in incluidas:
+            encontradas += 1
+            bloco = [l for l in secao.splitlines() if not l.startswith("Nota:")]
+            partes.extend(bloco)
+            partes.append("")
+            incluidas += "\n" + secao
 
     if encontradas == 0:
         # Fallback: usa o arquivo inteiro (sem as linhas Nota:)

@@ -15,12 +15,15 @@ from pipeline import config
 from pipeline import prompts as P
 from pipeline.orchestrator import PipelineOrchestrator
 from pipeline.project import StoryProject
+from pipeline.akashic import spellings_for
 from pipeline.scenes import (
     assemble_chapter,
     clean_scene,
     count_words,
     drop_new_system_lines,
+    official_names,
     parse_premise,
+    refine_problems,
     split_chapter,
 )
 
@@ -171,7 +174,7 @@ def test_capitulo_e_escrito_cena_por_cena_com_a_meta_certa(tmp_path):
     assert result.status == "done"
     drafts = [c for c in stub.calls if c[0] == "drafting"]
     assert len(drafts) == 3
-    target = max(250, config.CHAPTER_TARGET_WORDS // 3)
+    target = max(250, -(-config.CHAPTER_TARGET_WORDS // 3))
     for i, (_, prompt, kw) in enumerate(drafts, start=1):
         assert f"scene {i} of 3" in prompt
         assert f"about {target} words" in prompt
@@ -203,7 +206,7 @@ def test_cena_curta_ganha_continuacao_e_o_titulo_inventado_sai(tmp_path):
     assert "THIS SCENE SO FAR" in drafts[1] and "stopped too early" in drafts[1]
     _, scenes = split_chapter(result.draft)
     assert "Junk" not in result.draft
-    assert count_words(scenes[0]) >= max(250, config.CHAPTER_TARGET_WORDS // 3) * config.SCENE_MIN_RATIO
+    assert count_words(scenes[0]) >= max(250, -(-config.CHAPTER_TARGET_WORDS // 3)) * config.SCENE_MIN_RATIO
 
 
 def test_polimento_que_encolhe_a_cena_e_descartado(tmp_path):
@@ -239,8 +242,8 @@ def test_prefixo_do_prompt_e_igual_em_todas_as_cenas(tmp_path):
     stub = Recorder()
     _run(proj, stub)
     drafts = [c[1] for c in stub.calls if c[0] == "drafting"]
-    prefix = drafts[0].split("=== PREVIOUS CHAPTER ENDING")[0]
-    assert all(d.startswith(prefix) for d in drafts)
+    prefix = drafts[0].split("=== CHAPTER OUTLINE")[0]
+    assert "=== AKASHIC RECORDS" in prefix and all(d.startswith(prefix) for d in drafts)
 
 
 # ── Limpeza de repetição e fronteira entre cenas ──────────────
@@ -284,10 +287,74 @@ def test_prompt_da_cena_leva_proxima_cena_ultima_frase_e_voz(tmp_path):
     _run(proj, stub)
     drafts = [c for c in stub.calls if c[0] == "drafting"]
     first, second, last = drafts[0][1], drafts[1][1], drafts[2][1]
-    assert "The NEXT scene, which is NOT yours to write, is: The Genetic Key." in first
+    # Da próxima cena só vai o nome: com a descrição inteira, o modelo escreve a cena seguinte.
+    assert "The next scene (The Genetic Key.) is not yours" in first
+    assert "It instantly lights up" not in first.split("=== YOUR TASK ===")[1]
     assert 'The last sentence already written is: "The cursor blinked."' not in first  # a última é END-OF-CH1
     assert "END-OF-CH1" in first.split("The last sentence already written is:")[1]
     assert "Dry humor, IT guy." in first and "Never use these worn phrases" in first
-    assert "The NEXT scene" not in last
+    assert "The next scene" not in last
     assert drafts[0][2]["extra_options"]["repeat_last_n"] == config.DRAFTING_REPEAT_LAST_N
     assert "The last sentence already written is:" in second
+
+
+# ── Polimento que sai do texto ────────────────────────────────
+
+SPELLINGS = """## 10. Style guide (EN)
+
+- Names: use the official spellings list.
+
+### 13.2 Official spellings (EN)
+
+People and AIs: Arthur Galhardo; Arthur; Tinaia; Lelei la Lelena; Lelei; Present Mic.
+
+Places: the Ark; Atlantis; the Ring.
+"""
+
+DRAFT_SCENE = ("Arthur walked the dark corridor of Atlantis. The panel lit up under his hand.\n\n"
+               '"Hello?" he said. Nobody answered.')
+
+
+def test_limpeza_tira_linha_em_que_o_modelo_comenta_a_cena():
+    raw = "Arthur sat in the chair.\n\nThis scene will continue until Arthur discovers the controls."
+    assert clean_scene(raw) == "Arthur sat in the chair."
+
+
+def test_grafias_oficiais_so_com_quem_esta_na_cena():
+    block = spellings_for(SPELLINGS, DRAFT_SCENE)
+    assert "People and AIs: Arthur.\n" in block + "\n"
+    assert "Places: Atlantis." in block
+    assert "Tinaia" not in block and "Lelei" not in block and "the Ark" not in block
+    assert "Names: use the official spellings list." in block
+    assert official_names(SPELLINGS)[:3] == ["Arthur Galhardo", "Arthur", "Tinaia"]
+
+
+def test_polimento_fiel_ao_rascunho_passa():
+    polished = ("Arthur walked the dark corridor of Atlantis. Under his hand, the panel lit up.\n\n"
+                '"Hello?" he said. Nobody answered.')
+    assert refine_problems(polished, DRAFT_SCENE, names=official_names(SPELLINGS)) == []
+
+
+def test_polimento_que_traz_gente_do_registro_ou_vira_roteiro_e_recusado():
+    names = official_names(SPELLINGS)
+    guest = DRAFT_SCENE + "\n\nFrom the Ark, Tinaia watched him."
+    assert any("Tinaia" in p and "the Ark" in p for p in refine_problems(guest, DRAFT_SCENE, names=names))
+    # Quem a premissa do capítulo põe na cena pode aparecer.
+    assert refine_problems(guest, DRAFT_SCENE, "Tinaia greets him from the Ark.", names, max_ratio=2) == []
+    script = DRAFT_SCENE + '\n\nArthur: "Anyone?"\n\nHizashi Yamada: "Me."\n\nArthur: "Who?"'
+    problems = refine_problems(script, DRAFT_SCENE, names=names)
+    assert any("roteiro" in p for p in problems)
+    assert any("Yamada" in p for p in refine_problems(DRAFT_SCENE + " He met Hizashi Yamada there.", DRAFT_SCENE))
+
+
+def test_polimento_que_cresce_demais_e_recusado():
+    longer = DRAFT_SCENE + " " + " ".join(["and the lights kept humming quietly"] * 3)
+    assert any("cresceu" in p for p in refine_problems(longer, DRAFT_SCENE, max_ratio=1.25))
+
+
+def test_polimento_com_personagem_inventado_fica_com_o_rascunho(tmp_path):
+    proj = _project_with_ch1(tmp_path)
+    result = _run(proj, Recorder(refine_ratio=0.95, refine_extra='\n\nHizashi Yamada: "We saw Lelei and Lili."'))
+    assert split_chapter(result.final)[1] == split_chapter(result.draft)[1]
+    rejected = (proj.chapter_dir(2) / "polimento_descartado.md").read_text(encoding="utf-8")
+    assert "Motivo: inventou nomes" in rejected
