@@ -362,6 +362,10 @@ def generate_text(
             )
         logger.warning(f"O modelo '{model}' devolveu só tokens especiais. Descarregando e tentando de novo.")
         unload_model(model)
+        # O driver Vulkan desta placa não libera a VRAM na hora: recarregar de imediato competia
+        # pela memória ainda presa no modelo anterior e corrompia a carga de novo (duas falhas
+        # seguidas = erro "duro"). Dar um tempo pro descarregamento terminar de verdade.
+        time.sleep(8)
         return generate_text(model, system_prompt, user_prompt, temperature=temperature, num_ctx=num_ctx,
                              timeout=timeout, on_token=on_token, cancel_event=cancel_event,
                              extra_options=extra_options, provider=provider, json_output=json_output, _retry=False)
