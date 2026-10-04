@@ -142,6 +142,11 @@ _CHATTER = re.compile(
 )
 SYSTEM_LINE = re.compile(r"^\s*\[System\]", re.M)
 
+# Palavras_coladas_assim: artefato de modelos pequenos (parece nome de variável de código, nunca é
+# prosa de verdade). "well_known" como adjetivo hifenizado não existe em inglês com underscore, então
+# não há falso positivo esperado; linhas de comando/sistema (que podem ter nomes técnicos) ficam de fora.
+_GLUED_WORDS = re.compile(r"\b[a-zA-Z]{2,}_[a-zA-Z][a-zA-Z_]*\b")
+
 # Frases gastas de modelo pequeno (além das que o rascunho já evita): o polimento reescreve.
 CLICHES = [
     "a sense of", "eyes widened", "heart skipped a beat", "heart beat faster", "a mix of", "shiver ran down",
@@ -201,6 +206,11 @@ def scene_issues(text: str, allowed_source: str, checklist: Checklist, story_cod
         if m and not re.search(rf"(?<!\w){re.escape(term)}(?!\w)", allowed_source or "", re.I):
             issues.append(Issue("idioma", f"palavra da premissa sem traduzir: {term}"))
             break
+    glued = {m for l in (text or "").splitlines() if not l.lstrip().startswith(("[", ">"))
+            for m in _GLUED_WORDS.findall(l)}
+    if glued:
+        issues.append(Issue("formatação", "palavras coladas com sublinhado (parece código, não prosa): "
+                            + ", ".join(sorted(glued)[:4])))
     if system_left is not None:
         extra = system_lines(text) - max(system_left, 0)
         if extra > 0:

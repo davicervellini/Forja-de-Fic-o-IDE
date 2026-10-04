@@ -618,3 +618,16 @@ def test_corte_por_repeticao_do_ollama_aproveita_o_texto():
         out = api.generate_text("m", "s", "p", num_ctx=4096, extra_options={"num_predict": 100})
     assert out == "He walked. He walked. "
 
+
+
+def test_conferencia_acha_palavras_coladas_com_sublinhado():
+    cl = qa.Checklist()
+    text = "He emerged into the twilight of the junk_fields.\n\n[System] a_b status: ok\n\n> run_command"
+    issues = qa.scene_issues(text, "", cl, "en", [], None)
+    kinds = {i.kind: i for i in issues}
+    assert "formatação" in kinds
+    assert "junk_fields" in kinds["formatação"].text
+    # Linhas de sistema/comando não entram na checagem: nomes técnicos não são prosa quebrada.
+    assert "a_b" not in kinds["formatação"].text and "run_command" not in kinds["formatação"].text
+    assert kinds["formatação"].hard
+    assert qa.scene_issues("He walked through the junkyard quietly.", "", cl, "en", [], None) == []
