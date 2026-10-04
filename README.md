@@ -36,7 +36,7 @@ ollama serve
 
 ## Uso
 
-### Interface nova (janela web, em construção)
+### Abrir o programa
 
 Para abrir sem a janela preta do console, use o atalho **Forja de Ficção** da área de
 trabalho, dê dois cliques em `Abrir Forja.pyw` ou rode `pythonw app_desktop.py`. Sem
@@ -68,8 +68,7 @@ história e uma frase "Never:" com o que não existe no lugar), "fica dentro de"
 "sempre no contexto" e as imagens da wiki. **Importar da Wiki** nessa aba busca a página
 pelo nome exato, escreve a ficha com a época do universo, deixa escolher outra página e
 sugere os sublocais listados na página. Na premissa, **Locais em cena** manda as fichas
-desses locais para o fim de cada cena. O assistente de criação
-continua na interface antiga até ser migrado.
+desses locais para o fim de cada cena.
 
 A aba **Premissa** tem um formulário guiado: título, objetivo, abertura (continuidade com
 o capítulo anterior), personagens em cena, cenas com meta de palavras, gancho, o que
@@ -87,11 +86,14 @@ premissa do capítulo seguinte já estiver escrita, a última cena do capítulo 
 dela e termina exatamente onde o próximo começa.
 
 O programa trabalha com dois idiomas. O **idioma da interface** (⚙ Configurações) vale
-para a tela e para tudo o que o programa escreve para você ler: resumos, memória, fichas
-de personagens e locais, sugestões e conferências de premissa. O **idioma da história**
-é escolhido em cada projeto (ao criar, ou em **Livro: idioma e exportação**) e vale só
-para o texto dos capítulos e para o livro exportado. Mudar o idioma da história não
-traduz capítulos prontos. A interface tem tradução para português e inglês; para
+para a tela e para o que o programa escreve só para você ler: fichas de personagens e
+locais, sugestões e conferências de premissa, relatórios de verificação. O **idioma da
+história** é escolhido em cada projeto (ao criar, ou em **Livro: idioma e exportação**) e
+vale para o texto dos capítulos, o livro exportado e tudo o que o modelo lê de novo nos
+capítulos seguintes: resumos, memória, roster e pontas soltas. Passar a memória pelo seu
+idioma a cada capítulo trocava nomes oficiais e mudava o sentido dos fatos; para ler a
+memória no seu idioma, use **Ler no meu idioma** na tela **História até agora** (a tradução
+fica só na tela). Mudar o idioma da história não traduz capítulos prontos. A interface tem tradução para português e inglês; para
 acrescentar outra, copie `webapp/static/i18n/en.json` para `<código>.json`, traduza os
 valores e inclua o código em `UI_TRANSLATED` (`pipeline/languages.py`).
 
@@ -104,6 +106,46 @@ por capítulo. Deixe "Ativar a Pasta Limpa" desligado: o texto já vem sem linha
 
 Toda edição, refação ou restauração guarda antes o texto anterior em
 `capitulos/capitulo_NN/versoes/`.
+
+**Como cada capítulo é escrito.** Antes da primeira cena:
+
+- a premissa é traduzida para o idioma da história, com o glossário do registro (linhas
+  `senha = the ticket` numa seção de glossário, ou "grafia oficial: X. Em inglês, Y") e o
+  capítulo anterior como contexto. A tradução fica na aba **Verificações**, onde dá para
+  corrigi-la; a correção vale enquanto a premissa não mudar;
+- o Registro Akáshico é recortado para o capítulo: só as fichas de quem está nele (quem
+  estreia depois nem é citado), os universos e as grafias que o capítulo usa e os cartões de
+  arco da faixa de capítulos dele (veja `AKASHIC.md`). O recorte fica em `canon_modelo.md`;
+- os itens de "Precisa aparecer" são distribuídos pelas cenas (`checklist.json`, editável),
+  e os nomes proibidos e os personagens que ainda não estrearam viram trava.
+
+Cada cena recebe um roteiro do capítulo em que as cenas seguintes aparecem só pelo nome, o
+momento em que ela termina, os itens dela, as falas de exemplo do protagonista tiradas dos
+capítulos já escritos e as linhas [System] que ainda cabem no capítulo. Cada cena é escrita
+em **versões** (padrão 2, com o prompt em cache só a geração se repete); fica a de melhor
+nota, e um juiz escolhe entre as duas melhores. A cena que traz quem não pode aparecer,
+conversa com o leitor, troca de idioma ou esquece um item da premissa é escrita de novo com
+a correção (até 2 vezes).
+
+No polimento, primeiro uma **revisão com citação** aponta contradições, repetições, cenas
+recontadas e erros de sentido, e só os trechos citados são trocados (`critica.md`). Depois o
+polimento de linha recebe a lista exata do que reescrever (frases gastas, repetições de cenas
+anteriores, aspas abertas) e a voz de quem está na cena. Polimento que traz gente nova ou
+perde uma linha [System] volta só o parágrafo do rascunho; o que sai do texto por inteiro é
+descartado.
+
+No fim, a **conferência final** olha o capítulo inteiro, cena por cena, com o cânone do
+capítulo e sem cortes. Se achar um problema grave (personagem que não pode estar ali, item
+proibido, conversa de assistente), o capítulo fica marcado e a memória não é atualizada: a
+geração em lote para ali. Revise na aba **Verificações**, corrija o texto ou refaça, e use
+**↻ Atualizar memória**. A memória é atualizada por mudanças (`memoria_diff.md`): o que o
+modelo não menciona fica como está, um thread só sai com evidência no resumo e nada que cite
+quem ainda não estreou entra.
+
+Tudo isso fica em ⚙ Configurações › Qualidade. Mais versões e conferências deixam o capítulo
+mais lento. O prompt de cena tem um teto (`PROMPT_BUDGET_TOKENS` no `.env`); acima dele a
+memória mais antiga é resumida antes. Os pedidos ao Ollama vão com `truncate: false`: se o
+prompt não couber, o contexto cresce em vez de o começo do prompt sumir em silêncio.
 
 Cada fase (rascunho, polimento, resumo) pode usar o Ollama local ou um modelo na nuvem:
 Anthropic (Claude), Google (Gemini), OpenAI (GPT) ou qualquer serviço compatível com a
@@ -120,99 +162,43 @@ espera. Chave errada, modelo inexistente e recusa de conteúdo não trocam: apar
 Os pedidos ao Ollama saem com `think: false`, porque modelos que raciocinam antes de
 responder (gemma4, qwen3) gastariam o teto de tokens pensando.
 
-### Interface Gráfica antiga (customtkinter)
-
-```powershell
-python gui.py
-```
-
-Ou via CLI:
-
-```powershell
-python main.py --gui
-```
-
-### Linha de Comando — Capítulo Único
-
-```powershell
-# Usa premissa.txt automaticamente
-python main.py
-
-# Ou especifica o arquivo
-python main.py --premise minha_premissa.txt
-```
-
-Se `premissa.txt` não existir, o script solicita a premissa via terminal.
-
-### Linha de Comando — Fila de Capítulos (Batch)
-
-Crie uma pasta com um `.txt` por capítulo (ordenados por nome):
-
-```
-premissas/
-├── 01_chegada.txt
-├── 02_exploracao.txt
-└── 03_conflito.txt
-```
-
-```powershell
-python main.py --batch premissas/
-```
-
 ## Configuração
 
-Edite o arquivo `.env` na raiz do projeto:
-
-```env
-# Modelos
-MODEL_DRAFTING=llama3.1:8b
-MODEL_REFINING=gemma3:12b
-
-# Temperaturas (criatividade)
-DRAFTING_TEMPERATURE=0.7
-REFINING_TEMPERATURE=0.75
-
-# Janela de contexto
-DRAFTING_NUM_CTX=8192
-REFINING_NUM_CTX=8192
-
-# Timeout (segundos) — generoso para troca de modelo na VRAM
-REQUEST_TIMEOUT=600
-```
-
-Na GUI, a configuração também pode ser editada em tempo real no painel lateral.
-
-## Estrutura de Saída
-
-```
-output/
-├── capitulo_01/
-│   ├── 1_rascunho.md          ← Fase 1: narrativa bruta
-│   ├── 2_capitulo_final.md    ← Fase 2: prosa polida
-│   └── 3_resumo.md            ← Fase 3: resumo de continuidade
-├── capitulo_02/
-│   ├── ...
-└── contexto_acumulado.md      ← Resumos acumulados de todos os capítulos
-```
+A tela ⚙ Configurações grava o que você muda em `config.json`, na pasta de dados do usuário, e
+isso vale mais que o `.env`. O `.env` da raiz traz os padrões e as chaves que a tela não mostra
+(limites de memória, metas de cena, teto do prompt); apague uma linha para voltar ao padrão de
+`pipeline/config.py`.
 
 ## Estrutura do Projeto
 
 ```
-Fanfiction/
-├── biblia-do-mundo.md      ← Referência do universo (cânone)
-├── premissa.txt            ← Input principal (premissa do capítulo)
-├── .env                    ← Configuração editável
-├── requirements.txt        ← Dependências Python
-├── main.py                 ← Entry point CLI
-├── gui.py                  ← Interface gráfica
+Forja-de-Fic-o-IDE/
+├── app_desktop.py          ← Abre a janela (pywebview) com a interface
+├── main.py                 ← O mesmo que app_desktop.py
+├── .env                    ← Padrões da configuração
+├── webapp/
+│   ├── server.py           ← API local (FastAPI, só 127.0.0.1)
+│   ├── jobs.py             ← Uma geração por vez, com eventos para a tela
+│   └── static/             ← Interface (HTML, JS, traduções)
 ├── pipeline/
-│   ├── __init__.py
-│   ├── config.py           ← Carregamento de configuração
-│   ├── api.py              ← Cliente da API do Ollama (streaming)
-│   ├── io_utils.py         ← Leitura/gravação de arquivos
-│   ├── prompts.py          ← System prompts das 3 fases
-│   └── orchestrator.py     ← Lógica do pipeline (single + batch)
-└── output/                 ← Saída gerada
+│   ├── orchestrator.py     ← Fases do capítulo: rascunho, polimento, resumo, memória
+│   ├── prompts.py          ← Pedidos ao modelo
+│   ├── canon.py            ← Pedaço do Registro Akáshico de cada capítulo
+│   ├── qa.py               ← Conferência das cenas e do capítulo
+│   ├── memory_ops.py       ← Memória atualizada por mudanças
+│   ├── scenes.py           ← Cenas: divisão, limpeza, travas do polimento
+│   ├── premise.py          ← Premissa guiada
+│   ├── api.py, providers.py← Ollama e provedores na nuvem
+│   └── ...
+├── tests/                  ← pytest
+└── projetos/<projeto>/     ← Uma pasta por história (fora do git)
+    ├── registro_akashico.md, registro_modelo.md
+    ├── estado.json, memoria_dinamica.md, roster.md, open_threads.md, callbacks.md
+    └── capitulos/capitulo_NN/
+        ├── premissa.md, premissa_modelo.md, checklist.json, canon_modelo.md
+        ├── rascunho.md, critica.md, capitulo_final.md, resumo.md
+        ├── consistencia.md, memoria_diff.md, polimento_descartado.md
+        └── versoes/
 ```
 
 ## Tratamento de Erros

@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import cast
+from pipeline import images, wizard
+from pipeline.akashic_schema import read_meta
 from pipeline import premise as premise_mod
 from pipeline import premise_flow
 from pipeline.premise_flow import premise_context
@@ -44,9 +46,21 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Arquivos extras que a tela do capítulo mostra, quando existem.
 EXTRA_FILES = {
     "consistency": "consistencia.md",
+    "premise_model": "premissa_modelo.md",
+    "critique": "critica.md",
     "rejected_polish": "polimento_descartado.md",
+    "memory_diff": "memoria_diff.md",
+    "checklist": "checklist.json",
+    "canon": "canon_modelo.md",
     "planned_scenes": "cenas_planejadas.md",
 }
+
+
+def _extra_text(key: str, text: str) -> str:
+    """Texto do arquivo extra para a tela: sem a marca de cache da premissa traduzida."""
+    if key == "premise_model" and text.startswith("<!-- "):
+        return text.split("\n", 1)[1] if "\n" in text else ""
+    return text
 
 
 # ── Corpos das requisições ───────────────────────────────────
@@ -55,6 +69,12 @@ class NewProject(BaseModel):
     name: str
     akashic_text: str = ""
     language: str = "en"
+    # Respostas do assistente de criação: o registro é gerado a partir delas.
+    wizard_answers: dict | None = None
+
+
+class WizardBody(BaseModel):
+    answers: dict
 
 
 class TextBody(BaseModel):
@@ -78,12 +98,19 @@ class StateBody(BaseModel):
     open_threads: str | None = None
     dynamic_memory: str | None = None
     story_so_far: str | None = None
+    callbacks: str | None = None
 
 
 class ProjectMeta(BaseModel):
     book_title: str | None = None
     author: str | None = None
     language: str | None = None
+    cover: str | None = None
+
+
+class ImageUpload(BaseModel):
+    filename: str
+    data: str   # conteúdo em base64 (sem o prefixo "data:...;base64,")
 
 
 class ExportBody(BaseModel):
@@ -258,6 +285,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
                 "last_chapter": p["last_chapter"],
                 "last_modified": p["last_modified"],
                 "created": p["created"],
+                "cover": p.get("cover", ""),
             })
         out.sort(key=lambda p: p["last_modified"] or "", reverse=True)
         return out
@@ -274,8 +302,11 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         project.metadata["language"] = body.language or "en"
         project._save_metadata()
         msg = ""
-        if body.akashic_text.strip():
-            write_file(project.akashic_path, body.akashic_text)
+        text = body.akashic_text
+        if body.wizard_answers:
+            text = wizard.build_text(body.wizard_answers)
+        if text.strip():
+            write_file(project.akashic_path, text)
             _, msg = build_registro_modelo(project.project_dir)
         return {"slug": project.project_dir.name, "message": msg}
 
@@ -306,7 +337,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
         return {
             "slug": slug,
             "name": project.name,
-            "meta": {k: project.metadata.get(k, "") for k in ("book_title", "author", "language")},
+            "meta": {k: project.metadata.get(k, "") for k in ("book_title", "author", "language", "cover")},
             "story_language": story_language(project),
             "chapters": chapters,
             "next_chapter": project.next_chapter_num(),
@@ -316,6 +347,7 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
                 "open_threads": project.open_threads,
                 "dynamic_memory": project.dynamic_memory,
                 "story_so_far": project.story_so_far,
+                "callbacks": project.callbacks,
                 "summaries": [{"num": n, "text": t} for n, t in project.accumulated_summaries],
             },
         }
@@ -341,7 +373,54 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
     def get_akashic(slug: str):
         project = load(slug)
         text = read_file(project.akashic_path) if project.akashic_path.exists() else ""
-        return {"text": text}
+        meta, _ = read_meta(text)
+        return {"text": text, "answers": meta.answers if meta else {}}
+
+    # ── Imagens do projeto ──────────────────────────────────
+
+    @app.get("/api/projects/{slug}/media/{name}")
+    def get_media(slug: str, name: str):
+        path = images.resolve(project_dir(slug), name)
+        if path is None:
+            raise HTTPException(404, "Imagem não encontrada.")
+        return FileResponse(path, media_type=images.media_type(path))
+
+    @app.post("/api/projects/{slug}/media")
+    def upload_media(slug: str, body: ImageUpload):
+        import base64
+        import binascii
+        try:
+            data = base64.b64decode(body.data.split(",", 1)[-1], validate=True)
+            rel = images.save_image(project_dir(slug), body.filename, data)
+        except (binascii.Error, ValueError) as e:
+            raise HTTPException(400, str(e))
+        return {"path": rel}
+
+    # ── Assistente de criação do registro ───────────────────
+
+    @app.get("/api/wizard")
+    def get_wizard():
+        return wizard.definition()
+
+    @app.post("/api/wizard/preview")
+    def wizard_preview(body: WizardBody):
+        return wizard.preview(body.answers)
+
+    @app.put("/api/projects/{slug}/akashic/wizard")
+    def put_akashic_wizard(slug: str, body: WizardBody):
+        """Refaz o registro inteiro a partir das respostas do assistente (a versão anterior fica guardada)."""
+        ensure_idle(slug)
+        project = load(slug)
+        missing = wizard.preview(body.answers)["missing"]
+        if missing:
+            raise HTTPException(400, "Falta responder: " + "; ".join(m["title"] for m in missing))
+        if project.akashic_path.exists():
+            write_file(project.project_dir / "registro_akashico.anterior.md", read_file(project.akashic_path))
+        write_file(project.akashic_path, wizard.build_text(body.answers))
+        ok, msg = build_registro_modelo(project.project_dir)
+        if not ok:
+            raise HTTPException(400, msg)
+        return {"message": msg}
 
     @app.put("/api/projects/{slug}/akashic")
     def put_akashic(slug: str, body: TextBody):
@@ -397,12 +476,47 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
             "draft": txt("rascunho.md"),
             "final": txt("capitulo_final.md"),
             "summary": txt("resumo.md"),
-            "extras": {k: txt(v) for k, v in EXTRA_FILES.items()},
+            "extras": {k: _extra_text(k, txt(v)) for k, v in EXTRA_FILES.items()},
             "info": info,
             "later_done": later,
             "has_snapshot": ch.has_snapshot(project, num),
             "versions": ch.list_versions(project, num),
         }
+
+    @app.put("/api/projects/{slug}/chapters/{num}/premise-model")
+    def put_premise_model(slug: str, num: int, body: TextBody):
+        """
+        Corrige à mão a premissa traduzida para o idioma da história. A correção vale enquanto a
+        premissa original não mudar (a marca de cache no topo do arquivo é mantida).
+        """
+        ensure_idle(slug)
+        project = load(slug)
+        chapter_exists(project, num)
+        path = project.chapter_dir(num) / "premissa_modelo.md"
+        original = project.chapter_dir(num) / "premissa.md"
+        if not original.exists():
+            raise HTTPException(400, "O capítulo não tem premissa.")
+        import hashlib
+        key = hashlib.sha1(read_file(original).encode("utf-8")).hexdigest()[:12]
+        write_file(path, f"<!-- {key} -->\n{body.text.strip()}\n")
+        return {"ok": True}
+
+    @app.post("/api/projects/{slug}/state/translate")
+    def translate_state(slug: str):
+        """Tradução da memória para o idioma da interface, só para ler (não volta para os prompts)."""
+        ensure_idle()
+        require_backends({config.PROVIDER_REFINING})
+        project = load(slug)
+
+        def target(callbacks, cancel_event: threading.Event):
+            out = premise_flow.translate_state_for_reading(project, cancel_event, callbacks.on_status)
+            jobs.emit("state_translated", project=slug, state=out)
+
+        try:
+            job = jobs.start("translate", slug, "Traduzindo a memória para ler", target)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return {"job": job.id}
 
     @app.get("/api/projects/{slug}/chapters/{num}/publish")
     def chapter_publish(slug: str, num: int):

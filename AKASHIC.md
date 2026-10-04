@@ -25,9 +25,43 @@ Seções numeradas padrão: 1 Story summary (EN) · 2 Inviolable rules (EN) · 3
 10 Style guide (EN) · 11 Estrutura da história · 12 Linha do tempo · 13 Glossário (13.2 Official spellings (EN)) ·
 14 What the models must not do (EN). `[A DEFINIR: ...]` marca o que ainda falta preencher.
 
+## O que vai para o modelo
+
+O `registro_modelo.md` junta as seções 1, 2, 5.8, 9.5, 10, 13.2 e 14 e também **qualquer seção com "(EN)" no título**
+(é a convenção para o que é escrito para o modelo). A cada capítulo o pipeline recorta esse arquivo
+(`pipeline/canon.py`, resultado em `capitulos/capitulo_NN/canon_modelo.md`):
+
+- **Fichas (5.8)**: só do elenco da premissa, dos protagonistas e de quem já estreou e é citado na premissa ou na
+  memória. Quem estreia depois não aparece nem de nome, nem nas frases da seção 1. A estreia vem do campo
+  **Estreia (capítulo)** do personagem; sem ele, do que a ficha disser ("Visitor from Chapter 205", "Created in
+  Chapter 5"); sem isso, de ter estado no elenco planejado de um capítulo já concluído.
+- **Universos (9.5)**: os dos personagens que entraram, dos locais em cena, os de papel base/hub e os citados.
+- **Grafias (13.2)**: só os nomes que o capítulo usa, com a maiúscula do registro ("the heart of the city" não puxa
+  "the Heart").
+- **Seções com faixa de capítulos no título** entram só nessa faixa. Exemplo, para fatos de um arco que as premissas
+  usam e que o resto do registro não diz:
+
+  ```
+  ### 6.9 Arc card: Atlantis, Chapters 1-3 (EN)
+  - Atlantis rests on the ocean floor of Lantea, an ocean planet in the Pegasus galaxy. Never the Atlantic.
+  - Transporters are closet-sized cabins with a city-map panel.
+  ```
+
+  "Chapters 6+" vale do capítulo 6 em diante. Com um cartão de arco valendo, a seção 1 vai só com o primeiro parágrafo
+  e o de "Timing".
+- **Amostra de voz** (`### 10.1 Voice sample (EN)`): dois trechos curtos de um capítulo bom, com os parágrafos. Sai do
+  bloco do registro e vai para o fim do prompt de cada cena; frases copiadas dela são apagadas do texto gerado.
+- **Glossário** (seção com "Glossary" ou "Glossário" no título): linhas `senha = the ticket (queue number, Chapter 1)`.
+  A tradução da premissa usa esses pares, e um termo em português que vaze para a história faz a cena ser reescrita.
+  Frases "Nome e grafia oficial: a Gerência. Em inglês, the Management." em qualquer lugar do registro também valem.
+
+O personagem também tem o campo **Voz** (em inglês): regras curtas de fala e duas ou três falas reais. Vai no fim do
+prompt de cada cena em que ele aparece; sem ele, vai a ficha.
+
 ## Projeto novo: árvore de escolhas
 
-Ao criar um projeto, o assistente (`gui_akashic.AkashicWizard`) percorre uma árvore em cascata (`pipeline/akashic_tree.py`).
+O assistente de criação percorre uma árvore em cascata (`pipeline/akashic_tree.py`). A tela dele era da interface antiga,
+que foi removida; a lógica continua aqui, testada, para a interface web.
 Cada pergunta só aparece quando as respostas anteriores a tornam relevante:
 
 1. Origem do mundo (original, fanfic, crossover) e estrutura (um universo, multiverso, linhas do tempo).
@@ -42,9 +76,9 @@ lista de universos com regras, sistema de poder e seus limites, regras de vida e
 
 ## Edição dentro do projeto
 
-O botão **📜 Akáshico** abre o editor: abas Universos, Personagens e Texto. **Salvar** grava o arquivo, mantém uma cópia
-`registro_akashico.md.bak` e recompila o `registro_modelo.md`. Arquivo no formato antigo mostra um aviso com o botão
-**Converter para o formato v2**, que guarda `registro_akashico.v1.bak.md` antes.
+A tela **Personagens e universos** edita universos, personagens e locais (os metadados) e gera as listas 5.8 e 9.5;
+a tela **Registro Akáshico** edita o texto inteiro. Salvar recompila o `registro_modelo.md` e guarda a versão anterior
+em `registro_akashico.anterior.md`.
 
 ## Migração de um arquivo v1
 

@@ -142,7 +142,9 @@ def _xhtml(title: str, body: str, lang: str) -> str:
     )
 
 
-def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: str = "", lang: str = "en") -> Path:
+def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: str = "", lang: str = "en",
+               cover: Path | None = None) -> Path:
+    """EPUB 3. `cover`: imagem da capa (vira a primeira página e a miniatura nos leitores)."""
     path = Path(path)
     book_id = f"urn:uuid:{uuid.uuid4()}"
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -153,6 +155,14 @@ def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: st
     )
     spine = "\n".join(f'    <itemref idref="c{c.num}"/>' for _, c in files)
     creator = f"    <dc:creator>{html.escape(author)}</dc:creator>\n" if author else ""
+    cover_name, cover_type = "", ""
+    if cover and Path(cover).is_file():
+        from pipeline.images import media_type
+        cover_name, cover_type = f"cover{Path(cover).suffix.lower()}", media_type(Path(cover))
+        manifest = (f'    <item id="cover-image" href="{cover_name}" media-type="{cover_type}" properties="cover-image"/>\n'
+                    '    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n' + manifest)
+        creator += '    <meta name="cover" content="cover-image"/>\n'
+    first = '    <itemref idref="cover"/>\n' if cover_name else ""
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">\n'
@@ -167,7 +177,7 @@ def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: st
         '    <item id="css" href="style.css" media-type="text/css"/>\n'
         '    <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>\n'
         f"{manifest}\n  </manifest>\n"
-        '  <spine toc="ncx">\n    <itemref idref="title"/>\n'
+        f'  <spine toc="ncx">\n{first}    <itemref idref="title"/>\n'
         f"{spine}\n  </spine>\n</package>\n"
     )
     nav_items = "\n".join(f'<li><a href="{name}">{html.escape(c.title)}</a></li>' for name, c in files)
@@ -202,6 +212,11 @@ def write_epub(path: Path, title: str, chapters: list[ExportChapter], author: st
         z.writestr("OEBPS/toc.ncx", ncx, compress_type=zipfile.ZIP_DEFLATED)
         z.writestr("OEBPS/style.css", CSS, compress_type=zipfile.ZIP_DEFLATED)
         z.writestr("OEBPS/title.xhtml", title_page, compress_type=zipfile.ZIP_DEFLATED)
+        if cover_name:
+            z.write(cover, f"OEBPS/{cover_name}", compress_type=zipfile.ZIP_STORED)
+            page = _xhtml(title, f'<div style="text-align:center"><img src="{cover_name}" alt="{html.escape(title)}" '
+                                 'style="max-width:100%;max-height:100%"/></div>', lang)
+            z.writestr("OEBPS/cover.xhtml", page, compress_type=zipfile.ZIP_DEFLATED)
         for name, c in files:
             z.writestr(f"OEBPS/{name}", _xhtml(c.title, chapter_body_html(c), lang), compress_type=zipfile.ZIP_DEFLATED)
     return path
@@ -299,7 +314,9 @@ def export_project(
     dest.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "epub":
         lang = project.metadata.get("language", "en")
-        write_epub(dest, title, chapters, author=project.metadata.get("author", ""), lang=lang)
+        from pipeline.images import resolve
+        cover = resolve(project.project_dir, project.metadata.get("cover", ""))
+        write_epub(dest, title, chapters, author=project.metadata.get("author", ""), lang=lang, cover=cover)
     elif fmt == "royalroad":
         write_royalroad_zip(dest, chapters)
     elif fmt == "md":

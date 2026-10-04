@@ -125,10 +125,12 @@
 
     <div id="panel-story" class="panel hidden">
       <h2>História até agora</h2>
-      <p class="muted">É o que o modelo lembra da história. Os campos são atualizados a cada capítulo; você pode corrigir à mão.</p>
+      <p class="muted">É o que o modelo lembra da história, no idioma da história (traduzir a memória a cada capítulo trocava nomes e sentidos). Os campos são atualizados a cada capítulo; você pode corrigir à mão.</p>
+      <div class="tab-tools"><button id="btn-translate-state" title="Mostra a memória traduzida para o idioma da interface, só para ler">Ler no meu idioma</button></div>
       <label>Personagens (roster)<textarea class="editor small" data-state="character_roster"></textarea></label>
       <label>Pontas soltas (open threads)<textarea class="editor small" data-state="open_threads"></textarea></label>
       <label>Memória dinâmica<textarea class="editor small" data-state="dynamic_memory"></textarea></label>
+      <label>Detalhes para retomar (callbacks)<textarea class="editor small" data-state="callbacks"></textarea></label>
       <label>História até agora (resumos fundidos)<textarea class="editor small" data-state="story_so_far"></textarea></label>
       <div class="tab-tools"><button class="primary" id="btn-save-state">Salvar</button></div>
       <h3>Resumos recentes</h3>
@@ -139,7 +141,7 @@
       <h2>Registro Akáshico</h2>
       <p class="muted">Texto completo do registro. Ao salvar, a versão curta que vai para o modelo é gerada de novo, e a anterior fica em <code>registro_akashico.anterior.md</code>. As listas das seções 5.8 e 9.5 são geradas pela tela <b>Personagens e universos</b>: edite lá.</p>
       <textarea class="editor tall mono" id="akashic-edit"></textarea>
-      <div class="tab-tools"><button class="primary" id="btn-save-akashic">Salvar registro</button><span class="muted" id="akashic-msg"></span></div>
+      <div class="tab-tools"><button class="primary" id="btn-save-akashic">Salvar registro</button><button id="btn-akashic-wizard" title="Gera o registro a partir de perguntas guiadas">Assistente de criação</button><span class="muted" id="akashic-msg"></span></div>
     </div>
 
     <div id="panel-export" class="panel hidden">
@@ -151,6 +153,10 @@
       </div>
       <p class="muted">Muda só o idioma dos próximos capítulos gerados e do livro exportado. Capítulos prontos não são traduzidos.</p>
       <div class="tab-tools"><button id="btn-save-meta">Salvar dados do livro</button></div>
+      <h3>Capa</h3>
+      <p class="muted">Aparece no cartão do projeto e na primeira página do EPUB. Proporção 2:3 (ex.: 400 × 600, a do Royal Road).</p>
+      <div id="cover-box"></div>
+      <div class="tab-tools"><button id="btn-cover">Escolher capa</button><button id="btn-cover-del" class="danger-ghost">Tirar capa</button></div>
       <h3>Exportar livro</h3>
       <div class="form-grid">
         <label>Formato<select id="export-format">

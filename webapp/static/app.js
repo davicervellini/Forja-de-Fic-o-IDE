@@ -180,7 +180,7 @@ function applyBusy() {
   const busyHere = projectBusy();
   const anyBusy = !!S.job;
   ["#btn-add-chapter", "#btn-redo", "#btn-delete-chapter", "#btn-edit-final", "#btn-save-final",
-   "#btn-save-premise", "#btn-suggest-premise", "#btn-check-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-save-akashic", "#btn-save-cast"].forEach(sel => {
+   "#btn-save-premise", "#btn-suggest-premise", "#btn-check-premise", "#btn-refresh-memory", "#btn-save-state", "#btn-translate-state", "#btn-save-akashic", "#btn-akashic-wizard", "#btn-save-cast"].forEach(sel => {
     const el = $(sel);
     if (el) el.disabled = busyHere;
   });
@@ -259,7 +259,13 @@ function handleEvent(e) {
       }
       break;
     case "chapter_complete":
-      if (!quiet && S.job && S.job.project === S.slug) toast(`Capítulo ${String(e.chapter).padStart(2, "0")} pronto.`);
+      if (!quiet && S.job && S.job.project === S.slug) {
+        if (e.status === "qa_failed") toast(`Capítulo ${String(e.chapter).padStart(2, "0")} escrito, mas a conferência final achou problemas. A memória não foi atualizada: veja a aba Verificações.`, "warn", 12000);
+        else toast(`Capítulo ${String(e.chapter).padStart(2, "0")} pronto.`);
+      }
+      break;
+    case "state_translated":
+      if (e.project === S.slug) showTranslatedState(e.state);
       break;
     case "premise_result":
     case "premise_check":
@@ -340,7 +346,7 @@ async function loadProjects() {
       const card = document.createElement("div");
       card.className = "project-card";
       const when = p.last_modified ? new Date(p.last_modified).toLocaleString("pt-BR") : "";
-      card.innerHTML = `<h3>${esc(p.name)}</h3>
+      card.innerHTML = `${p.cover ? `<img class="project-cover" src="${esc(mediaUrl(p.cover, p.slug))}" alt="" loading="lazy">` : ""}<h3>${esc(p.name)}</h3>
         <span class="muted">${p.last_chapter ? `${p.last_chapter} capítulo(s) concluído(s)` : "Nenhum capítulo concluído"}</span>
         <span class="muted">${esc(when)}</span>
         <div class="row"><span class="spacer"></span><button class="danger-ghost" data-del>Mover para a lixeira</button></div>`;
@@ -356,27 +362,255 @@ async function loadProjects() {
 
 async function newProject() {
   let akashic = "";
+  let wizardAnswers = null;
   const r = await openDialog({
     title: "Novo projeto",
     body: `<label>Nome da história<input id="np-name" autofocus></label>
       <label>Idioma da história<select id="np-lang">${langOptions("en")}</select></label>
-      <p class="muted">Os capítulos são escritos neste idioma. A interface, os resumos, a memória e as fichas ficam no seu idioma.</p>
-      <label>Registro Akáshico (opcional)<input type="file" id="np-file" accept=".md,.txt"></label>
-      <p class="muted">O Registro Akáshico é a bíblia da história: mundo, personagens, regras e estilo. Dá para importar agora ou depois, e o assistente de criação guiado ainda está na versão antiga do programa.</p>`,
+      <p class="muted">Os capítulos são escritos neste idioma, e a memória da história também. A interface, as fichas e os relatórios ficam no seu idioma.</p>
+      <div class="muted" style="margin-top:8px">Registro Akáshico (a bíblia da história: mundo, personagens, regras e estilo)</div>
+      <label class="check"><input type="radio" name="np-reg" value="wizard" checked> Criar com o assistente (perguntas guiadas)</label>
+      <label class="check"><input type="radio" name="np-reg" value="file"> Importar um arquivo .md</label>
+      <label class="check"><input type="radio" name="np-reg" value="later"> Depois</label>
+      <input type="file" id="np-file" accept=".md,.txt" class="hidden">`,
+    onOpen: () => {
+      $$('input[name="np-reg"]').forEach(el => { el.onchange = () => $("#np-file").classList.toggle("hidden", el.value !== "file" || !el.checked); });
+    },
     actions: [
       { label: "Cancelar", value: null },
-      { label: "Criar", cls: "primary", value: "ok", handler: async () => {
+      { label: "Continuar", cls: "primary", value: "ok", handler: async () => {
         const name = $("#np-name").value.trim();
         if (!name) { toast("Dê um nome ao projeto.", "warn"); return false; }
-        const f = $("#np-file").files[0];
-        if (f) akashic = await f.text();
-        const res = await api("POST", "/api/projects", { name, akashic_text: akashic, language: $("#np-lang").value });
-        if (res.message) toast(res.message);
-        S.pendingOpen = res.slug;
+        const mode = $('input[name="np-reg"]:checked').value;
+        const lang = $("#np-lang").value;
+        if (mode === "file") {
+          const f = $("#np-file").files[0];
+          if (!f) { toast("Escolha o arquivo do registro.", "warn"); return false; }
+          akashic = await f.text();
+        }
+        S.newProject = { name, lang, mode };
       } },
     ],
   });
-  if (r === "ok" && S.pendingOpen) openProject(S.pendingOpen);
+  if (r !== "ok" || !S.newProject) return;
+  const { name, lang, mode } = S.newProject;
+  S.newProject = null;
+  if (mode === "wizard") {
+    const wizLang = ["en", "pt-BR", "es"].includes(lang) ? lang : "other";
+    wizardAnswers = await openWizard({ title: name, language: wizLang }, "Criar projeto");
+    if (!wizardAnswers) return;
+  }
+  try {
+    const res = await api("POST", "/api/projects", { name, akashic_text: akashic, language: lang, wizard_answers: wizardAnswers });
+    if (res.message) toast(res.message);
+    openProject(res.slug);
+  } catch (e) { fail(e); }
+}
+
+// ── Assistente de criação do Registro Akáshico ──────────────
+
+function wizVisible(q, a) {
+  return Object.entries(q.when || {}).every(([k, allowed]) => {
+    const v = a[k];
+    return (Array.isArray(v) ? v : [v]).some(x => allowed.includes(x));
+  });
+}
+
+function wizMin(q, a) {
+  return q.id === "universes" && a.structure === "multiverse" ? 2 : (q.min_items || 0);
+}
+
+function wizAnswered(q, a) {
+  const v = a[q.id];
+  if (q.kind === "universes" || q.kind === "characters") return (v || []).filter(x => (x.name || "").trim()).length >= wizMin(q, a);
+  if (q.kind === "multi") return !!(v && v.length);
+  return !!String(v ?? "").trim();
+}
+
+function slugify(text) {
+  const s = String(text || "").toLowerCase().trim().replace(/[^\p{L}\p{N}_\s-]/gu, "").replace(/[\s-]+/g, "_");
+  return s || "universo";
+}
+
+async function openWizard(initial = {}, finishLabel = "Concluir") {
+  let def;
+  try { def = S.wizardDef || (S.wizardDef = await api("GET", "/api/wizard")); } catch (e) { fail(e); return null; }
+  const W = { answers: JSON.parse(JSON.stringify(initial || {})), step: 0 };
+  const steps = () => def.questions.filter(q => wizVisible(q, W.answers)).concat([{ id: "_review", title: "Revisão", kind: "review" }]);
+
+  const renderSteps = () => {
+    const list = steps();
+    $("#wiz-steps").innerHTML = list.map((q, i) => {
+      const v = W.answers[q.id];
+      const empty = Array.isArray(v) ? !v.filter(x => typeof x !== "object" || (x.name || "").trim()).length : !String(v ?? "").trim();
+      const done = q.kind === "review" ? "" : (!q.required && empty ? "○" : wizAnswered(q, W.answers) ? "✓" : "•");
+      return `<button type="button" class="wiz-step ${i === W.step ? "active" : ""}" data-step="${i}" title="${esc(q.title)}"><span class="wiz-mark">${done}</span>${esc(q.title)}</button>`;
+    }).join("");
+    $$("#wiz-steps [data-step]").forEach(b => { b.onclick = () => { W.step = parseInt(b.dataset.step, 10); render(); }; });
+  };
+
+  const opt = (q, type) => q.options.map(([v, l]) => {
+    const cur = W.answers[q.id];
+    const on = type === "radio" ? cur === v : (cur || []).includes(v);
+    return `<label class="check"><input type="${type}" name="wiz-${q.id}" value="${esc(v)}" ${on ? "checked" : ""}> ${esc(l)}</label>`;
+  }).join("");
+
+  const universeRows = q => {
+    const list = W.answers[q.id] || (W.answers[q.id] = []);
+    const roles = Object.entries(def.universe_roles).map(([k, l]) => [k, l]);
+    return `<div class="wiz-rows">${list.map((u, i) => `
+      <div class="wiz-row wiz-uni" data-row="${i}">
+        <input data-k="name" value="${esc(u.name || "")}" placeholder="Nome do universo">
+        <select data-k="role">${roles.map(([k, l]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <input data-k="wiki" value="${esc(u.wiki || "")}" placeholder="wiki do Fandom (ex.: stargate)">
+        <input data-k="allowed_characters" value="${esc((u.allowed_characters || []).join(", "))}" placeholder="personagens permitidos, separados por vírgula">
+        <button type="button" class="danger-ghost" data-del="${i}" title="Remover">✕</button>
+      </div>`).join("") || '<p class="muted">Nenhum universo ainda.</p>'}</div>
+      <div class="inline-row"><select id="wiz-cat"><option value="">Escolha no catálogo…</option>${def.catalog.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}</select>
+        <button type="button" id="wiz-add-cat">+ Do catálogo</button><button type="button" id="wiz-add-new">+ Universo novo</button></div>`;
+  };
+
+  const characterRows = q => {
+    const list = W.answers[q.id] || (W.answers[q.id] = []);
+    const unis = [["", "— universo de origem"]].concat((W.answers.universes || []).filter(u => (u.name || "").trim()).map(u => [u.id || slugify(u.name), u.name]));
+    const roleSel = c => q.id === "supporting"
+      ? `<select data-k="role">${[["supporting", "Coadjuvante"], ["antagonist", "Antagonista"]].map(([k, l]) => `<option value="${k}" ${(c.role || "supporting") === k ? "selected" : ""}>${l}</option>`).join("")}</select>` : "";
+    return `<div class="wiz-rows">${list.map((c, i) => `
+      <div class="wiz-row wiz-char" data-row="${i}">
+        <input data-k="name" value="${esc(c.name || "")}" placeholder="Nome">
+        <input data-k="origin" value="${esc(c.origin || "")}" placeholder="Origem (nativo, reencarnado…)">
+        <input data-k="age" value="${esc(c.age || "")}" placeholder="Idade">
+        <select data-k="universe">${unis.map(([k, l]) => `<option value="${esc(k)}" ${(c.universe || "") === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        ${roleSel(c)}
+        <button type="button" class="danger-ghost" data-del="${i}" title="Remover">✕</button>
+      </div>`).join("") || '<p class="muted">Ninguém ainda.</p>'}</div>
+      <div class="inline-row"><button type="button" id="wiz-add-char">+ Personagem</button></div>`;
+  };
+
+  const renderReview = async () => {
+    $("#wiz-q").innerHTML = '<h3>Revisão</h3><p class="muted">Gerando o registro…</p>';
+    try {
+      const p = await api("POST", "/api/wizard/preview", { answers: W.answers });
+      const miss = p.missing.length
+        ? `<div class="warn-box"><b>Falta responder:</b> ${p.missing.map(m => `<a href="#" data-goto="${m.id}">${esc(m.title)}</a>`).join(" · ")}</div>`
+        : '<p class="muted">Tudo respondido. Os trechos <code>[A DEFINIR: …]</code> são para você completar depois, na tela do Registro Akáshico (resumo da história, fichas, arcos). As fichas dos personagens também podem ser escritas pela tela Personagens e universos, inclusive importando da wiki.</p>';
+      $("#wiz-q").innerHTML = `<h3>Revisão</h3>${miss}<pre class="reader small wiz-preview"></pre>`;
+      // O bloco de metadados (JSON) é para o programa; a prévia mostra só o texto.
+      $(".wiz-preview").textContent = p.text.replace(/<!-- akashic:meta[\s\S]*?-->\n?/, "");
+      $$("[data-goto]").forEach(a => {
+        a.onclick = ev => { ev.preventDefault(); W.step = steps().findIndex(q => q.id === a.dataset.goto); render(); };
+      });
+    } catch (e) { $("#wiz-q").innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+  };
+
+  const bindList = q => {
+    $$("#wiz-q [data-row]").forEach(row => {
+      const item = W.answers[q.id][parseInt(row.dataset.row, 10)];
+      $$("[data-k]", row).forEach(el => {
+        const handler = () => {
+          const k = el.dataset.k;
+          item[k] = k === "allowed_characters" ? el.value.split(",").map(x => x.trim()).filter(Boolean) : el.value;
+          if (q.kind === "universes" && k === "name" && !item.catalog) item.id = slugify(el.value);
+          renderSteps();
+        };
+        el.addEventListener(el.tagName === "SELECT" ? "change" : "input", handler);
+      });
+    });
+    $$("#wiz-q [data-del]").forEach(b => { b.onclick = () => { W.answers[q.id].splice(parseInt(b.dataset.del, 10), 1); render(); }; });
+    const addCat = $("#wiz-add-cat");
+    if (addCat) addCat.onclick = () => {
+      const c = def.catalog.find(x => x.name === $("#wiz-cat").value);
+      if (!c) return;
+      W.answers.universes.push({ id: c.id, name: c.name, wiki: c.wiki, role: "source", active: true, allowed_characters: [], catalog: true });
+      render();
+    };
+    const addNew = $("#wiz-add-new");
+    if (addNew) addNew.onclick = () => { W.answers.universes.push({ id: "", name: "", wiki: "", role: "original", active: true, allowed_characters: [] }); render(); };
+    const addChar = $("#wiz-add-char");
+    if (addChar) addChar.onclick = () => {
+      W.answers[q.id].push({ name: "", origin: "", age: "", universe: "", role: q.id === "protagonists" ? "protagonist" : "supporting" });
+      render();
+    };
+  };
+
+  const render = () => {
+    const list = steps();
+    W.step = Math.max(0, Math.min(W.step, list.length - 1));
+    const q = list[W.step];
+    renderSteps();
+    $("#wiz-back").disabled = W.step === 0;
+    $("#wiz-next").classList.toggle("hidden", q.kind === "review");
+    $("#wiz-count").textContent = `${Math.min(W.step + 1, list.length - 1)} de ${list.length - 1}`;
+    if (q.kind === "review") { renderReview(); return; }
+    const head = `<h3>${esc(q.title)}${q.required ? "" : ' <span class="muted">(opcional)</span>'}</h3>${q.help ? `<p class="muted">${esc(q.help)}</p>` : ""}`;
+    let body = "";
+    const v = W.answers[q.id];
+    if (q.kind === "text") body = `<input id="wiz-in" value="${esc(v ?? "")}">`;
+    else if (q.kind === "longtext") body = `<textarea id="wiz-in" class="notes">${esc(v ?? "")}</textarea>`;
+    else if (q.kind === "single") body = opt(q, "radio");
+    else if (q.kind === "multi") body = opt(q, "checkbox");
+    else if (q.kind === "universes") body = universeRows(q);
+    else if (q.kind === "characters") body = characterRows(q);
+    $("#wiz-q").innerHTML = head + body;
+    const input = $("#wiz-in");
+    if (input) { input.oninput = () => { W.answers[q.id] = input.value; renderSteps(); }; input.focus(); }
+    $$(`#wiz-q input[name="wiz-${q.id}"]`).forEach(el => {
+      el.onchange = () => {
+        if (q.kind === "single") W.answers[q.id] = el.value;
+        else W.answers[q.id] = $$(`#wiz-q input[name="wiz-${q.id}"]:checked`).map(x => x.value);
+        renderSteps();
+      };
+    });
+    if (q.kind === "universes" || q.kind === "characters") bindList(q);
+  };
+
+  const r = await openDialog({
+    title: "Assistente de criação do Registro Akáshico",
+    wide: true,
+    body: `<div class="wiz"><nav class="wiz-steps" id="wiz-steps"></nav>
+      <section class="wiz-main"><div id="wiz-q"></div>
+        <div class="wiz-nav"><button type="button" id="wiz-back">← Voltar</button><span class="muted" id="wiz-count"></span><span class="spacer"></span><button type="button" class="primary" id="wiz-next">Próxima →</button></div>
+      </section></div>`,
+    onOpen: () => {
+      $("#wiz-back").onclick = () => { W.step -= 1; render(); };
+      $("#wiz-next").onclick = () => { W.step += 1; render(); };
+      render();
+    },
+    actions: [
+      { label: "Cancelar", value: null },
+      { label: finishLabel, cls: "primary", value: "ok", handler: async () => {
+        const p = await api("POST", "/api/wizard/preview", { answers: W.answers });
+        if (p.missing.length) {
+          W.step = steps().findIndex(q => q.id === p.missing[0].id);
+          render();
+          toast(`Falta responder: ${p.missing.map(m => m.title).join("; ")}`, "warn", 8000);
+          return false;
+        }
+        W.answers = p.answers;
+      } },
+    ],
+  });
+  return r === "ok" ? W.answers : null;
+}
+
+async function wizardForProject() {
+  let current;
+  try { current = await api("GET", `/api/projects/${S.slug}/akashic`); } catch (e) { fail(e); return; }
+  if (current.text.trim()) {
+    const ok = await confirmDlg("Refazer o registro com o assistente",
+      `<p>O registro inteiro é gerado de novo a partir das respostas. O texto atual fica guardado em <code>registro_akashico.anterior.md</code>, mas o que você escreveu à mão nele (resumo, fichas, arcos) não entra no novo.${Object.keys(current.answers || {}).length ? " As respostas da última vez já vêm preenchidas." : ""}</p>`,
+      "Abrir o assistente");
+    if (!ok) return;
+  }
+  const initial = Object.keys(current.answers || {}).length ? current.answers : { title: S.project.name };
+  const answers = await openWizard(initial, "Gerar registro");
+  if (!answers) return;
+  try {
+    const res = await api("PUT", `/api/projects/${S.slug}/akashic/wizard`, { answers });
+    toast(res.message);
+    await refreshProject();
+    $("#akashic-edit").value = (await api("GET", `/api/projects/${S.slug}/akashic`)).text;
+  } catch (e) { fail(e); }
 }
 
 async function openProject(slug) {
@@ -491,15 +725,53 @@ function switchTab(tab) {
 
 function renderExtras(c) {
   const labels = {
-    consistency: ["Checagem de consistência", "Compara o capítulo com o Registro Akáshico e a memória."],
-    rejected_polish: ["Polimento descartado", "Cenas em que o polimento encolheu demais o texto. O capítulo final usa o rascunho delas."],
+    consistency: ["Checagem de consistência", "Conferência do capítulo pronto: personagens fora de hora, itens proibidos, contradições com o cânone e o que ficou faltando da premissa. Com problema grave, a memória não é atualizada até você revisar."],
+    premise_model: ["Premissa no idioma da história", "Tradução da premissa que o modelo usou para escrever. Corrija aqui o que saiu errado (um termo da história, uma referência a um capítulo anterior): a correção vale enquanto a premissa não mudar."],
+    critique: ["Revisão antes do polimento", "Trechos que o modelo apontou como contradição, repetição ou erro de sentido, e o que foi trocado."],
+    rejected_polish: ["Polimento descartado", "Cenas em que o polimento saiu do texto (encolheu, cresceu, trouxe gente que não estava na cena). O capítulo final usa o rascunho delas."],
+    memory_diff: ["Mudanças na memória", "O que este capítulo acrescentou ou mudou na memória da história, e o que foi recusado."],
+    checklist: ["Itens da premissa por cena", "Itens obrigatórios distribuídos pelas cenas e nomes proibidos (arquivo checklist.json, que você pode corrigir)."],
+    canon: ["Cânone do capítulo", "O pedaço do Registro Akáshico que o modelo recebeu neste capítulo."],
     planned_scenes: ["Cenas planejadas", "Divisão em cenas feita pelo modelo, quando a premissa não trazia cenas numeradas."],
   };
   const box = $("#extras-view");
   const parts = Object.entries(labels).filter(([k]) => c.extras[k] && c.extras[k].trim()).map(([k, [title, hint]]) =>
-    `<div class="extra-block"><h3>${title}</h3><p class="muted">${hint}</p><article class="reader small" data-extra="${k}"></article></div>`);
+    `<div class="extra-block"><h3>${title}</h3><p class="muted">${hint}</p>${k === "premise_model" ? '<div class="tab-tools"><button type="button" data-edit-premise-model>Corrigir tradução</button></div>' : ""}<article class="reader small" data-extra="${k}"></article></div>`);
   box.innerHTML = parts.length ? parts.join("") : '<p class="muted">Nenhuma verificação para este capítulo.</p>';
-  $$("[data-extra]", box).forEach(el => renderReader(el, c.extras[el.dataset.extra]));
+  $$("[data-extra]", box).forEach(el => {
+    const k = el.dataset.extra;
+    if (k === "checklist") el.textContent = checklistText(c.extras[k]);
+    else renderReader(el, c.extras[k]);
+  });
+  const edit = $("[data-edit-premise-model]", box);
+  if (edit) edit.onclick = () => editPremiseModel(c);
+}
+
+function checklistText(raw) {
+  try {
+    const d = JSON.parse(raw);
+    const lines = (d.items || []).map((it, i) => `${d.scene_of && d.scene_of[i] ? `Cena ${d.scene_of[i]}` : "Capítulo"}: ${it}`);
+    if ((d.forbidden_names || []).length) lines.push("", `Nomes proibidos: ${d.forbidden_names.join(", ")}`);
+    lines.push(`Linhas [System] no capítulo: até ${d.max_system_lines}`);
+    return lines.join("\n");
+  } catch (e) { return raw; }
+}
+
+async function editPremiseModel(c) {
+  await openDialog({
+    title: "Premissa no idioma da história",
+    wide: true,
+    body: `<p class="muted">É o texto que o modelo lê para escrever o capítulo. Mantenha os rótulos (Goal, Scenes, Must include…) e a numeração das cenas.</p><textarea class="editor" id="pm-edit"></textarea>`,
+    actions: [
+      { label: "Cancelar", value: null },
+      { label: "Salvar", cls: "primary", value: "ok", handler: async () => {
+        await api("PUT", `/api/projects/${S.slug}/chapters/${c.num}/premise-model`, { text: $("#pm-edit").value });
+        toast("Tradução salva. Vale na próxima geração deste capítulo.");
+        loadChapter(c.num, "extras");
+      } },
+    ],
+    onOpen: () => { $("#pm-edit").value = c.extras.premise_model || ""; },
+  });
 }
 
 function renderVersions(c) {
@@ -703,6 +975,7 @@ async function openPanel(name) {
     $("#meta-title").value = m.book_title || "";
     $("#meta-author").value = m.author || "";
     $("#meta-lang").innerHTML = langOptions(m.language || S.project.story_language || "en");
+    renderCover();
     $("#export-msg").textContent = "";
   }
   applyBusy();
@@ -713,12 +986,51 @@ function langOptions(selected) {
   return Object.entries(all).map(([code, name]) => `<option value="${code}" ${code === selected ? "selected" : ""}>${esc(name)}</option>`).join("");
 }
 
+function renderCover() {
+  const cover = (S.project.meta || {}).cover || "";
+  $("#cover-box").innerHTML = cover
+    ? `<img class="cover-preview" src="${esc(mediaUrl(cover))}" data-img="${esc(mediaUrl(cover))}" alt="">`
+    : '<p class="muted">Sem capa.</p>';
+  bindImages($("#cover-box"));
+  $("#btn-cover-del").classList.toggle("hidden", !cover);
+}
+
+async function setCover(path) {
+  try {
+    await api("PUT", `/api/projects/${S.slug}/meta`, { cover: path });
+    await refreshProject();
+    renderCover();
+  } catch (e) { fail(e); }
+}
+
 async function saveBookMeta(quiet = false) {
   await api("PUT", `/api/projects/${S.slug}/meta`, {
     book_title: $("#meta-title").value, author: $("#meta-author").value, language: $("#meta-lang").value,
   });
   await refreshProject();
   if (!quiet) toast("Dados do livro salvos.");
+}
+
+async function translateState() {
+  try { await api("POST", `/api/projects/${S.slug}/state/translate`); } catch (e) { fail(e); }
+}
+
+function showTranslatedState(st) {
+  const labels = { character_roster: "Personagens (roster)", open_threads: "Pontas soltas (open threads)",
+    dynamic_memory: "Memória dinâmica", callbacks: "Detalhes para retomar (callbacks)", story_so_far: "História até agora" };
+  const blocks = Object.entries(labels).filter(([k]) => (st[k] || "").trim())
+    .map(([k, l]) => `<div class="extra-block"><h3>${l}</h3><article class="reader small" data-tr="${k}"></article></div>`);
+  (st.summaries || []).forEach((s, i) => blocks.push(`<div class="extra-block"><h3>Resumo do capítulo ${String(s.num).padStart(2, "0")}</h3><article class="reader small" data-trs="${i}"></article></div>`));
+  openDialog({
+    title: "Memória no seu idioma (só para ler)",
+    wide: true,
+    body: `<p class="muted">Tradução para ler. O modelo continua lendo a memória no idioma da história; corrija lá, nos campos da tela.</p>${blocks.join("") || '<p class="muted">Memória vazia.</p>'}`,
+    actions: [{ label: "Fechar", value: null }],
+    onOpen: () => {
+      $$("[data-tr]").forEach(el => renderReader(el, st[el.dataset.tr]));
+      $$("[data-trs]").forEach(el => renderReader(el, st.summaries[parseInt(el.dataset.trs, 10)].text));
+    },
+  });
 }
 
 async function saveState() {
@@ -849,13 +1161,57 @@ function select(label, key, value, options) {
 
 function imageStrip(urls) {
   if (!urls || !urls.length) return "";
-  return `<div class="img-strip">${urls.map(u => `<img src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer" data-img="${esc(u)}" alt="" onerror="this.remove()">`).join("")}</div>`;
+  return `<div class="img-strip">${urls.map(u => `<img src="${esc(mediaUrl(u))}" loading="lazy" referrerpolicy="no-referrer" data-img="${esc(mediaUrl(u))}" alt="" onerror="this.remove()">`).join("")}</div>`;
+}
+
+// Imagem do projeto ("imagens/x.jpeg") vira o endereço da API; http(s) fica como está.
+function mediaUrl(path, slug = S.slug) {
+  if (!path) return "";
+  if (/^https?:\/\//.test(path)) return path;
+  return `/api/projects/${encodeURIComponent(slug)}/media/${encodeURIComponent(path.replace(/^imagens\//, ""))}`;
+}
+
+// Galeria editável: miniaturas com ✕ e o botão de enviar imagem do computador.
+function imageGallery(paths, label = "+ Imagem") {
+  const items = (paths || []).map((p, i) => `<div class="gal-item"><img src="${esc(mediaUrl(p))}" data-img="${esc(mediaUrl(p))}" referrerpolicy="no-referrer" alt="" loading="lazy">
+    <button type="button" class="danger-ghost" data-img-del="${i}" title="Tirar esta imagem">✕</button></div>`).join("");
+  return `<div class="gallery">${items}<button type="button" class="gal-add" data-img-add>${label}</button></div>`;
+}
+
+function pickImageFile() {
+  return new Promise(resolve => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/jpeg,image/png,image/webp,image/gif";
+    input.onchange = () => {
+      const f = input.files[0];
+      if (!f) return resolve(null);
+      const reader = new FileReader();
+      reader.onload = () => resolve({ filename: f.name, data: String(reader.result) });
+      reader.readAsDataURL(f);
+    };
+    input.click();
+  });
+}
+
+async function uploadImage() {
+  const file = await pickImageFile();
+  if (!file) return null;
+  try { return (await api("POST", `/api/projects/${S.slug}/media`, file)).path; } catch (e) { fail(e); return null; }
+}
+
+function bindGallery(root, list, onChange) {
+  $$("[data-img-del]", root).forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); list.splice(parseInt(b.dataset.imgDel, 10), 1); onChange(); };
+  });
+  const add = $("[data-img-add]", root);
+  if (add) add.onclick = async () => { const p = await uploadImage(); if (p) { list.push(p); onChange(); } };
 }
 
 function bindImages(root) {
   $$("[data-img]", root).forEach(img => {
     img.onclick = () => openDialog({
-      title: "Imagem da wiki", wide: true,
+      title: "Imagem", wide: true,
       body: `<img src="${esc(img.dataset.img)}" referrerpolicy="no-referrer" style="max-width:100%;border-radius:6px" alt="">`,
       actions: [{ label: "Fechar", value: null }],
     });
@@ -880,10 +1236,15 @@ function renderCastForm() {
         ${field("Idade", "age", it.age)}
         ${select("Universo de origem", "universe", it.universe, unis)}
         ${field("Rótulo na lista do modelo (opcional)", "sheet_label", it.sheet_label, "input", 'placeholder="ex.: Tinaia, the central AI."')}
+        ${field("Estreia (capítulo)", "debut_chapter", it.debut_chapter || "", "input", 'type="number" min="0" placeholder="vazio = desde o início"')}
       </div>
       ${field(`Ficha para o modelo <span class="muted" data-count></span>`, "sheet", it.sheet, "textarea", 'class="sheet" placeholder="Um parágrafo: origem, aparência, personalidade, poderes, jeito de falar."')}
-      <p class="muted">É o que o modelo lê sobre o personagem em todo capítulo (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar.${it.role === "protagonist" ? " A ficha do protagonista também vai no fim de cada cena, para segurar a voz dele." : ""}</p>
+      <p class="muted">É o que o modelo lê sobre o personagem nos capítulos em que ele está (seção 5.8). Um parágrafo curto: aparência, personalidade, poderes e jeito de falar. Antes do capítulo de estreia o modelo nem ouve falar dele.</p>
+      ${field("Voz (em inglês)", "voice", it.voice || "", "textarea", 'class="notes" placeholder="Regras curtas de fala e duas ou três falas reais de exemplo. Ex.: Short sentences, understatement, one IT joke per scene at most. &quot;Sole user. Very secure. Terrible bus factor.&quot;"')}
+      <p class="muted">Vai no fim do prompt de cada cena em que o personagem aparece${it.role === "protagonist" ? " (o protagonista, em toda cena)" : ""}. Sem ela, vale a ficha.</p>
       ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
+      <div class="muted">Retratos (só para você; o modelo não lê imagens):</div>
+      ${imageGallery(it.images || (it.images = []), "+ Retrato")}
       <div class="muted">Aparece nos capítulos:</div>
       <div class="chips">${seen.length ? seen.map(n => `<span class="chip" data-ch="${n}">${String(n).padStart(2, "0")}</span>`).join("") : '<span class="muted">nenhum ainda</span>'}</div>
       <div class="row-actions">
@@ -900,14 +1261,16 @@ function renderCastForm() {
         ${field("Nome", "name", it.name)}
         ${select("Universo", "universe", it.universe, unis)}
         ${select("Fica dentro de", "parent", it.parent, parents)}
+        ${field("Aparece a partir do capítulo", "debut_chapter", it.debut_chapter || "", "input", 'type="number" min="0" placeholder="vazio = desde o início"')}
       </div>
       <label class="check"><input type="checkbox" data-f="always" ${it.always ? "checked" : ""}> Sempre no contexto (a ficha vai em toda cena, não só quando o local está na premissa)</label>
       ${field(`Ficha para o modelo <span class="muted" data-count></span>`, "model_sheet", it.model_sheet, "textarea", 'class="sheet" placeholder="Planta: onde ficam as áreas principais, níveis, entradas. O que existe ali. Estado na época da história. Never: o que não existe ali."')}
-      <p class="muted">Vai para o prompt de cada cena quando o local está em "Locais em cena" na premissa (ou sempre, se marcado). Termine com uma frase "Never: …" com o que não existe ali, para o modelo não inventar.</p>
+      <p class="muted">Vai para o prompt da cena que cita o local (com o local que o contém), ou de toda cena, se marcado. Termine com uma frase "Never: …" com o que não existe ali, para o modelo não inventar.</p>
       ${field("Notas do autor (não vão para o modelo)", "notes", it.notes, "textarea", 'class="notes"')}
       ${it.url ? `<div class="muted">Wiki: <code>${esc(it.url)}</code></div>` : ""}
       ${children.length ? `<div class="muted" style="margin-top:6px">Locais dentro dele: ${children.map(esc).join(", ")}</div>` : ""}
-      ${imageStrip(it.images)}
+      <div class="muted">Imagens:</div>
+      ${imageGallery(it.images || (it.images = []))}
       <div class="row-actions">
         <button type="button" data-move="-1">↑</button><button type="button" data-move="1">↓</button>
         <button type="button" data-wiki-one title="Busca este local na wiki do universo e escreve a ficha">⇩ Buscar na Wiki</button>
@@ -934,6 +1297,7 @@ function renderCastForm() {
   const count = () => { const c = $("[data-count]", box); if (c) c.textContent = `(${words(it[sheetKey])} palavras)`; };
   count();
   bindImages(box);
+  bindGallery(box, it.images || [], () => { markCastDirty(); renderCastForm(); });
   $$("[data-f]", box).forEach(el => {
     el.addEventListener("input", () => {
       const k = el.dataset.f;
@@ -989,7 +1353,7 @@ function renderRosterMissing() {
   $$("[data-add-roster]", box).forEach(b => {
     b.onclick = () => {
       const r = miss[parseInt(b.dataset.addRoster, 10)];
-      S.cast.characters.push({ name: r.name, role: "supporting", origin: "", age: "", universe: "", notes: r.text, sheet: "", sheet_label: "" });
+      S.cast.characters.push({ name: r.name, role: "supporting", origin: "", age: "", universe: "", notes: r.text, sheet: "", sheet_label: "", debut_chapter: 0, voice: "", images: [] });
       S.cast.roster_missing = miss.filter(x => x !== r);
       S.castSel = S.cast.characters.length - 1;
       markCastDirty();
@@ -1006,7 +1370,7 @@ function addCastItem() {
     const base = S.cast.universes.find(u => u.active && u.role === "base") || S.cast.universes[0];
     S.cast.locations.push({ name: "Novo local", universe: base ? base.id : "", parent: "", always: false, model_sheet: "", notes: "", wiki_page: "", url: "", images: [] });
   } else {
-    S.cast.characters.push({ name: "Novo personagem", role: "supporting", origin: "", age: "", universe: "", notes: "", sheet: "", sheet_label: "" });
+    S.cast.characters.push({ name: "Novo personagem", role: "supporting", origin: "", age: "", universe: "", notes: "", sheet: "", sheet_label: "", debut_chapter: 0, voice: "", images: [] });
   }
   S.castSel = castItems().length - 1;
   markCastDirty();
@@ -1270,6 +1634,14 @@ function markPremiseDirty() {
   $("#premise-dirty").textContent = "alterações não salvas";
 }
 
+// Soma das metas das cenas contra o mínimo do capítulo (⚙ Configurações › Capítulo).
+function sceneWordsLabel(total, min) {
+  if (!total) return `mínimo do capítulo: ${min} palavras`;
+  return total < min
+    ? `${total} palavras · <span class="warn">abaixo do mínimo de ${min}</span>`
+    : `${total} palavras (mínimo do capítulo: ${min})`;
+}
+
 function renderPremiseForm() {
   const d = S.premise;
   if (!d) return;
@@ -1313,10 +1685,10 @@ function renderPremiseForm() {
     <div class="chips">${chips || '<span class="muted">Cadastre personagens em Personagens e universos.</span>'}<span class="chip add" data-char-add>+ outro</span></div>
     <div class="pf-label">Locais em cena <span class="muted">(as fichas deles vão no fim de cada cena: planta, o que existe e o que nunca existe ali)</span></div>
     <div class="chips">${locChips || '<span class="muted">Cadastre locais na aba Locais de Personagens e universos.</span>'}</div>
-    <div class="pf-label">Cenas <span class="muted">${total ? `${total} de ~${d.target_words} palavras` : `meta do capítulo: ~${d.target_words} palavras`}</span></div>
+    <div class="pf-label">Cenas <span class="muted" data-words-label>${sceneWordsLabel(total, d.target_words)}</span></div>
     <div id="scene-rows">${scenes || '<p class="muted">Nenhuma cena. Sem cenas, o modelo divide a premissa sozinho.</p>'}</div>
     <div class="tab-tools"><button type="button" id="btn-scene-add">+ Cena</button>
-      ${f.scenes.length ? '<button type="button" id="btn-scene-split">Dividir a meta igualmente</button>' : ""}</div>
+      ${f.scenes.length ? '<button type="button" id="btn-scene-split">Dividir o mínimo igualmente</button>' : ""}</div>
     <label>Gancho: como o capítulo termina<textarea data-pf="hook" class="pf-short">${esc(f.hook)}</textarea></label>
     <label>Precisa aparecer<textarea data-pf="must_include" class="pf-short" placeholder="ex.: uma linha [System] com o progresso da construção.">${esc(f.must_include)}</textarea></label>
     <label>Não pode aparecer<textarea data-pf="must_not" class="pf-short" placeholder="Personagens, lugares ou fatos que ainda não podem entrar.">${esc(f.must_not)}</textarea></label>`;
@@ -1356,7 +1728,7 @@ function renderPremiseForm() {
       markPremiseDirty();
       if (el.dataset.sf === "words") {
         const t = f.scenes.reduce((a, s) => a + (parseInt(s.words, 10) || 0), 0);
-        $$(".pf-label .muted", box)[1].textContent = `${t} de ~${d.target_words} palavras`;
+        $("[data-words-label]", box).innerHTML = sceneWordsLabel(t, d.target_words);
       }
     }));
     $("[data-sdel]", row).onclick = () => { f.scenes.splice(i, 1); markPremiseDirty(); renderPremiseForm(); };
@@ -1370,7 +1742,8 @@ function renderPremiseForm() {
   $("#btn-scene-add").onclick = () => { f.scenes.push({ text: "", words: null }); markPremiseDirty(); renderPremiseForm(); };
   const split = $("#btn-scene-split");
   if (split) split.onclick = () => {
-    const each = Math.round(d.target_words / f.scenes.length / 50) * 50;
+    // Arredonda para cima: a soma nunca fica abaixo do mínimo do capítulo.
+    const each = Math.ceil(d.target_words / f.scenes.length / 50) * 50;
     f.scenes.forEach(s => { s.words = each; });
     markPremiseDirty();
     renderPremiseForm();
@@ -1473,7 +1846,11 @@ const SETTINGS_FIELDS = [
     ["DRAFTING_NUM_GPU", "Rascunho", 1], ["REFINING_NUM_GPU", "Polimento", 1], ["SUMMARIZING_NUM_GPU", "Resumo", 1],
   ]],
   ["Capítulo", [
-    ["CHAPTER_TARGET_WORDS", "Palavras por capítulo", 100], ["REQUEST_TIMEOUT", "Tempo máximo de espera (s)", 60],
+    ["CHAPTER_TARGET_WORDS", "Mínimo de palavras por capítulo", 100], ["REQUEST_TIMEOUT", "Tempo máximo de espera (s)", 60],
+  ]],
+  ["Qualidade (mais versões e conferências = capítulo mais demorado)", [
+    ["DRAFT_CANDIDATES", "Versões de cada cena no rascunho", 1], ["REFINE_CANDIDATES", "Versões de cada cena no polimento", 1],
+    ["QA_SCENE_RETRIES", "Reescritas da cena que falha na conferência", 1],
   ]],
 ];
 
@@ -1551,6 +1928,8 @@ async function openSettings() {
         </div>
         <div class="inline-row"><button type="button" id="st-resume-cloud">Voltar a usar a nuvem agora</button><span class="muted" id="st-resume-msg"></span></div>
       </div>
+      <label class="check"><input type="checkbox" data-key="QA_JUDGE_ENABLED" ${v.QA_JUDGE_ENABLED ? "checked" : ""}> Conferir cada cena com o modelo (itens da premissa e proibições) e escolher entre as versões</label>
+      <label class="check"><input type="checkbox" data-key="REVISE_PASS_ENABLED" ${v.REVISE_PASS_ENABLED ? "checked" : ""}> Revisão antes do polimento (contradições, repetições e erros de sentido, com citação)</label>
       <label class="check"><input type="checkbox" data-key="CONSISTENCY_CHECK_ENABLED" ${v.CONSISTENCY_CHECK_ENABLED ? "checked" : ""}> Checagem de consistência depois de cada capítulo</label>
       <label class="check"><input type="checkbox" data-key="AUTO_NEXT_PREMISE" ${v.AUTO_NEXT_PREMISE ? "checked" : ""}> Escrever a premissa do próximo capítulo quando um capítulo terminar (fica esperando sua aprovação)</label>
       <p class="muted">Pasta de dados: <code>${esc(data.data_dir)}</code><br>Log: <code>${esc(data.log_file)}</code></p>`,
@@ -1687,7 +2066,11 @@ function bind() {
   $("#btn-refresh-memory").onclick = refreshMemory;
   $("#btn-delete-chapter").onclick = deleteChapter;
   $("#btn-save-state").onclick = saveState;
+  $("#btn-translate-state").onclick = translateState;
   $("#btn-save-akashic").onclick = saveAkashic;
+  $("#btn-akashic-wizard").onclick = wizardForProject;
+  $("#btn-cover").onclick = async () => { const p = await uploadImage(); if (p) setCover(p); };
+  $("#btn-cover-del").onclick = () => setCover("");
   $("#btn-export").onclick = exportBook;
   $("#btn-save-meta").onclick = () => saveBookMeta().catch(fail);
   $("#btn-save-cast").onclick = saveCast;

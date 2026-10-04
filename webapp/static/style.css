@@ -299,3 +299,37 @@ dialog.wide { width: min(900px, 94vw); }
 
 /* URLs e nomes longos quebram em vez de alargar o painel. */
 .cast-form code, .cast-form .muted { overflow-wrap: anywhere; }
+
+/* Assistente de criação do Registro Akáshico */
+.wiz { display: grid; grid-template-columns: 230px 1fr; gap: 16px; min-height: 420px; }
+.wiz-steps { display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow-y: auto; border-right: 1px solid var(--line); padding-right: 8px; }
+.wiz-step { text-align: left; background: none; border: none; padding: 5px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; color: inherit; }
+.wiz-step.active { background: var(--bg-2); font-weight: 600; }
+.wiz-mark { display: inline-block; width: 16px; color: var(--muted, #888); }
+.wiz-main { display: flex; flex-direction: column; min-width: 0; }
+.wiz-main #wiz-q { flex: 1; overflow-y: auto; max-height: 56vh; }
+.wiz-main input, .wiz-main textarea, .wiz-main select { max-width: 100%; box-sizing: border-box; }
+.wiz-nav { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.wiz-nav .spacer { flex: 1; }
+.wiz-rows { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.wiz-row { display: grid; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 6px; }
+.wiz-row > * { min-width: 0; margin: 0; }
+.wiz-uni { grid-template-columns: 1.2fr 1.3fr 0.9fr auto; }
+.wiz-uni [data-k="allowed_characters"] { grid-column: 1 / 4; }
+.wiz-char { grid-template-columns: 1.4fr 1.4fr 0.5fr 1.2fr auto; }
+.wiz-char:has(select[data-k="role"]) { grid-template-columns: 1.3fr 1.2fr 0.5fr 1fr 0.9fr auto; }
+.wiz-step { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wiz-preview { white-space: pre-wrap; max-height: 42vh; overflow-y: auto; font: 12.5px/1.5 var(--mono, monospace); }
+.warn-box { border: 1px solid var(--amber); border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+@media (max-width: 700px) { .wiz { grid-template-columns: 1fr; } .wiz-steps { max-height: 160px; border-right: none; } .wiz-row { grid-template-columns: 1fr 1fr; } .wiz-uni [data-k="allowed_characters"] { grid-column: 1 / -1; } }
+
+/* Imagens do projeto */
+.gallery { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 12px; align-items: flex-start; }
+.gal-item { position: relative; }
+.gal-item img { height: 120px; width: auto; max-width: 160px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; display: block; }
+.gal-item button { position: absolute; top: 2px; right: 2px; padding: 0 6px; background: rgba(0, 0, 0, 0.6); }
+.gal-add { height: 120px; min-width: 90px; border-style: dashed; }
+.project-cover { height: 200px; width: auto; max-width: 100%; align-self: flex-start; object-fit: cover; border-radius: 6px; margin-bottom: 6px; }
+.cover-preview { max-height: 300px; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; }
+
+.pf-label .warn { color: var(--amber); }
