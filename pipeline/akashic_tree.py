@@ -11,7 +11,7 @@ A árvore foi desenhada a partir dos eixos que as grandes séries usam para orga
   7. tom, classificação, ponto de vista, idioma;
   8. estrutura da história (temporadas, tamanho dos capítulos).
 Cada pergunta só aparece quando as respostas anteriores a tornam relevante (campo `when`). Isto é dados + funções
-puras: a interface (gui_akashic.py) e os testes usam as mesmas funções.
+puras, cobertas por tests/test_akashic_v2.py (a tela do assistente ainda não existe na interface web).
 """
 
 from dataclasses import dataclass, field

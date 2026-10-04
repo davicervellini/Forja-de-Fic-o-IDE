@@ -1,15 +1,12 @@
 """
-main.py — Entry point para a IDE do Pipeline de Ficção.
+main.py — Abre a Forja de Ficção (mesma coisa que app_desktop.py).
 
 Uso:
-    python main.py
+    python main.py            # janela própria
+    python main.py --browser  # no navegador padrão
 """
 
-from gui import AppRoot
-
-def main():
-    app = AppRoot()
-    app.mainloop()
+import app_desktop
 
 if __name__ == "__main__":
-    main()
+    app_desktop.run()
