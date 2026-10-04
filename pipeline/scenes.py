@@ -260,11 +260,25 @@ def remove_repeated_sentences(text: str, seen: set[tuple[str, ...]], n: int = RE
     return "\n\n".join(out_paras)
 
 
+def _repeats_verbatim(small: str, big: str) -> bool:
+    """
+    Verdadeiro se as palavras de `small` aparecem seguidas dentro de `big` — pega uma fala
+    repetida ao pé da letra mesmo quando ela está embutida num parágrafo maior (narração +
+    diálogo juntos), caso em que a semelhança por Jaccard do parágrafo inteiro dilui demais
+    para passar do threshold.
+    """
+    small_words = " ".join(_WORD.findall(small.lower()))
+    big_words = " ".join(_WORD.findall(big.lower()))
+    return bool(small_words) and small_words in big_words
+
+
 def drop_overlap(new_scene: str, previous_text: str, threshold: float = 0.45, lookback: int = 4) -> str:
     """Tira do começo da cena nova os parágrafos que repetem o final do texto anterior."""
     prev = paragraphs(previous_text)[-lookback:]
     paras = paragraphs(new_scene)
-    while paras and prev and count_words(paras[0]) >= 8 and any(similarity(paras[0], p) >= threshold for p in prev):
+    while paras and prev and count_words(paras[0]) >= 8 and any(
+        similarity(paras[0], p) >= threshold or _repeats_verbatim(paras[0], p) for p in prev
+    ):
         paras.pop(0)
     return "\n\n".join(paras)
 

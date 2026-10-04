@@ -653,3 +653,23 @@ def test_polimento_com_nome_corrompido_e_consertado_por_paragrafo():
     names = ["Alexei", "Maeve", "Kargen"]
     problems = refine_problems(polished, scene, names=names, max_ratio=2)
     assert any("Alexelli" in p and "Alexei" in p for p in problems)
+
+
+def test_drop_overlap_pega_fala_repetida_mesmo_dentro_de_paragrafo_maior():
+    from pipeline.scenes import drop_overlap
+
+    # A cena anterior termina com um parágrafo que mistura narração e a fala; a semelhança
+    # por Jaccard do parágrafo inteiro cai abaixo do threshold, mas a fala em si é idêntica
+    # (achado no capítulo 4: a cena seguinte reabriu repetindo a última fala ao pé da letra).
+    previous = (
+        'He walked away, exhausted.\n\n'
+        '"There," he gasped, leaning his forehead against the cool metal of the wall. '
+        '"Now that is what I call a successful negotiation."'
+    )
+    new_scene = (
+        '"That is what I call a successful negotiation."\n\n'
+        'Alexei exhaled, his breath hitching in his chest.'
+    )
+    out = drop_overlap(new_scene, previous)
+    assert "successful negotiation" not in out
+    assert out.startswith("Alexei exhaled")
