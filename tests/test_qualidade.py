@@ -607,3 +607,14 @@ def test_minimo_de_palavras_muda_pela_configuracao(tmp_path):
         prompt = PM.build_suggest_prompt(2, config.CHAPTER_TARGET_WORDS, akashic="A", outline=None, previous_tail="",
                                          story_so_far="", summaries=[], open_threads="", roster="")
         assert "Minimum length: 3000 words." in prompt
+
+
+def test_corte_por_repeticao_do_ollama_aproveita_o_texto():
+    lines = [json.dumps({"response": "He walked. ", "done": False}),
+             json.dumps({"response": "He walked. ", "done": False}),
+             json.dumps({"error": "prediction aborted, token repeat limit reached"})]
+
+    with patch.object(api.requests, "post", lambda url, json=None, stream=False, timeout=None: _Resp(200, lines=lines)):
+        out = api.generate_text("m", "s", "p", num_ctx=4096, extra_options={"num_predict": 100})
+    assert out == "He walked. He walked. "
+

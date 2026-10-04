@@ -297,6 +297,13 @@ def generate_text(
 
             # Erro reportado dentro do stream (ex.: falta de memória)
             if chunk.get("error"):
+                if "repeat limit" in str(chunk["error"]):
+                    # O Ollama cortou a resposta porque o modelo entrou em laço repetindo tokens. O que
+                    # veio antes do laço serve; a limpeza de repetição e as travas de quem chamou cuidam do resto.
+                    logger.warning(f"Ollama cortou a geração por repetição ({len(accumulated_text)} chars aproveitados)")
+                    _last.done_reason = "repeat"
+                    response.close()
+                    break
                 raise OllamaError(f"Ollama reportou erro durante a geração: {chunk['error']}")
 
             # Extrai o token da resposta, sem tokens especiais.
