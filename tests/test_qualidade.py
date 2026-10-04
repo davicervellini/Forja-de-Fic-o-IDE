@@ -337,6 +337,9 @@ class _Resp:
     def iter_lines(self, decode_unicode=True):
         return iter(self._lines)
 
+    def json(self):
+        return json.loads(self.text)
+
     def close(self):
         pass
 
@@ -377,6 +380,38 @@ def test_contexto_cheio_nao_vira_descarregar_e_tentar_de_novo():
         else:
             raise AssertionError("devia falhar")
     assert "unload" not in calls
+
+
+def test_tokens_especiais_espera_o_runner_sair_do_ps_antes_de_recarregar():
+    # 1ª geração: só lixo (achado real: isso deixava o runner antigo e o da retentativa
+    # disputando a VRAM ao mesmo tempo porque recarregava antes do unload terminar de
+    # verdade). 2ª geração (depois do unload + espera): sai limpa.
+    junk = [json.dumps({"response": "<unused1>", "done": False})] * (api._JUNK_LIMIT + 1)
+    good = json.dumps({"response": "ok", "done": True})
+    calls = []
+
+    def post(url, json=None, stream=False, timeout=None):
+        calls.append(json)
+        return _Resp(200, lines=junk) if len(calls) == 1 else _Resp(200, lines=[good])
+
+    ps_responses = [{"models": [{"name": "m"}]}, {"models": []}]
+    ps_calls = []
+
+    def get(url, timeout=None):
+        ps_calls.append(url)
+        return _Resp(200, body=json.dumps(ps_responses[len(ps_calls) - 1]))
+
+    unload_calls = []
+    with patch.object(api.requests, "post", post), patch.object(api.requests, "get", get), \
+         patch.object(api, "unload_model", lambda m: unload_calls.append(m)), \
+         patch.object(api.time, "sleep", lambda s: None):
+        out = api.generate_text("m", "s", "p", num_ctx=4096, extra_options={"num_predict": 100})
+
+    assert out == "ok"
+    assert unload_calls == ["m"]
+    # Só avançou pra recarregar depois que o /api/ps parou de listar o modelo (2 consultas:
+    # a 1ª ainda via "m" carregado, a 2ª já veio vazia).
+    assert len(ps_calls) == 2
 
 
 # ── Fluxo completo com as etapas novas ────────────────────────

@@ -46,6 +46,25 @@ def unload_model(model: str):
         logger.warning(f"Não foi possível descarregar o modelo '{model}': {e}")
 
 
+def _wait_for_unload(model: str, timeout: float = 20.0):
+    """
+    Espera o Ollama de fato soltar o runner do modelo (`/api/ps` sem ele) antes de recarregar.
+    `unload_model` só agenda o descarregamento; se a próxima geração começar antes dele terminar,
+    dois runners disputam a VRAM ao mesmo tempo e a carga forçada (num_gpu fixo) corrompe de novo.
+    """
+    ps_url = f"{config.OLLAMA_BASE_URL.rstrip('/')}/api/ps"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = requests.get(ps_url, timeout=5)
+            names = {m.get("name") or m.get("model") for m in r.json().get("models", [])}
+            if model not in names:
+                return
+        except requests.RequestException:
+            return
+        time.sleep(1)
+
+
 # ── Tamanho do prompt ────────────────────────────────────────
 # Caracteres por token, conservador (texto em português gasta mais tokens por palavra). Ajustado
 # quando o Ollama informa o tamanho exato de um prompt recusado.
@@ -362,10 +381,11 @@ def generate_text(
             )
         logger.warning(f"O modelo '{model}' devolveu só tokens especiais. Descarregando e tentando de novo.")
         unload_model(model)
-        # O driver Vulkan desta placa não libera a VRAM na hora: recarregar de imediato competia
-        # pela memória ainda presa no modelo anterior e corrompia a carga de novo (duas falhas
-        # seguidas = erro "duro"). Dar um tempo pro descarregamento terminar de verdade.
-        time.sleep(8)
+        # `unload_model` só agenda o descarregamento; recarregar antes dele terminar deixa dois
+        # runners disputando a VRAM (visto no log do Ollama: "loaded runners" count=2) e, como o
+        # num_gpu do modelo é fixo, a carga forçada sem memória sobrando corrompe de novo — duas
+        # falhas seguidas = erro "duro". Esperar o runner antigo sair da lista antes de tentar.
+        _wait_for_unload(model)
         return generate_text(model, system_prompt, user_prompt, temperature=temperature, num_ctx=num_ctx,
                              timeout=timeout, on_token=on_token, cancel_event=cancel_event,
                              extra_options=extra_options, provider=provider, json_output=json_output, _retry=False)
