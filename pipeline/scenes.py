@@ -21,6 +21,7 @@ Formatos de premissa aceitos (inglês ou português), por exemplo:
 
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 SCENE_BREAK = "* * *"
 
@@ -567,6 +568,37 @@ def new_proper_nouns(polished: str, allowed: str) -> list[str]:
     return found
 
 
+_ANY_CAPITALIZED = re.compile(r"\b[A-ZÀ-Ý][a-zà-ÿ'’]*\b")
+
+
+def garbled_names(text: str, names: list[str], source: str = "") -> list[tuple[str, str]]:
+    """
+    Palavras do texto parecidas com um nome oficial do elenco, mas não exatamente iguais a ele nem
+    a nenhuma palavra do `source` (rascunho) — o polimento, de vez em quando, troca uma letra do
+    nome de um personagem ("Alexei" → "Alexelli"). Olha qualquer posição na frase, inclusive o
+    começo, onde `new_proper_nouns` não procura (lá uma maiúscula de início de frase é normal).
+    Retorna [(palavra encontrada, nome oficial mais parecido)].
+    """
+    if not names:
+        return []
+    known_words = _words_set(source) if source else set()
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for w in _ANY_CAPITALIZED.findall(text or ""):
+        core = re.sub(r"['’]s$", "", w)
+        if len(core) < 4 or core.lower() in seen or core.lower() in known_words:
+            continue
+        seen.add(core.lower())
+        if any(core == n or core.lower() == n.lower() for n in names):
+            continue  # é o próprio nome oficial
+        best = max(names, key=lambda n: SequenceMatcher(None, core.lower(), n.lower()).ratio())
+        ratio = SequenceMatcher(None, core.lower(), best.lower()).ratio()
+        # Perto o bastante do nome oficial para ser o mesmo nome desfigurado, mas não uma palavra à toa.
+        if ratio >= 0.8 and core.lower()[:2] == best.lower()[:2]:
+            found.append((core, best))
+    return found
+
+
 def refine_problems(polished: str, draft: str, premise: str = "", names: list[str] | None = None,
                     max_ratio: float = 1.25, forbidden: list[str] | None = None) -> list[str]:
     """
@@ -588,6 +620,10 @@ def refine_problems(polished: str, draft: str, premise: str = "", names: list[st
     lost_lines = lost_system_spans(polished, draft)
     if lost_lines:
         problems.append(f"perdeu {len(lost_lines)} linha(s) [System] ou comando")
+    garbled = garbled_names(polished, names or [], allowed)
+    if garbled:
+        problems.append("inventou nome parecido com um oficial: "
+                        + ", ".join(f'{w} (≈ {official})' for w, official in garbled[:4]))
     strangers = new_proper_nouns(polished, allowed)
     if len(strangers) >= 2:
         problems.append("inventou nomes: " + ", ".join(strangers[:6]))

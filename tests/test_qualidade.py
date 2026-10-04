@@ -631,3 +631,25 @@ def test_conferencia_acha_palavras_coladas_com_sublinhado():
     assert "a_b" not in kinds["formatação"].text and "run_command" not in kinds["formatação"].text
     assert kinds["formatação"].hard
     assert qa.scene_issues("He walked through the junkyard quietly.", "", cl, "en", [], None) == []
+
+
+def test_garbled_names_acha_nome_corrompido_em_qualquer_posicao():
+    from pipeline.scenes import garbled_names
+
+    names = ["Alexei", "Maeve", "Kargen"]
+    draft = "Alexei sighed. He walked away."
+    # Corrompido no começo da frase (onde new_proper_nouns não procura) e novo em relação ao rascunho.
+    assert garbled_names("Alexelli sighed. He walked away.", names, draft) == [("Alexelli", "Alexei")]
+    # Já estava assim no rascunho: não é uma corrupção nova do polimento.
+    assert garbled_names("Alexelli sighed.", names, "Alexelli sighed.") == []
+    # O próprio nome oficial, ou uma palavra comum qualquer, não acusa nada.
+    assert garbled_names("Alexei sighed. Then he left.", names, draft) == []
+    assert garbled_names("Kargen roared once.", names, draft) == []
+
+
+def test_polimento_com_nome_corrompido_e_consertado_por_paragrafo():
+    scene = "Alexei sighed. \"Maybe you just need a better perspective.\""
+    polished = "Alexelli sighed. \"Maybe you just need a better perspective, da?\""
+    names = ["Alexei", "Maeve", "Kargen"]
+    problems = refine_problems(polished, scene, names=names, max_ratio=2)
+    assert any("Alexelli" in p and "Alexei" in p for p in problems)
