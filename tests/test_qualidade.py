@@ -382,10 +382,37 @@ def test_contexto_cheio_nao_vira_descarregar_e_tentar_de_novo():
     assert "unload" not in calls
 
 
-def test_tokens_especiais_espera_o_runner_sair_do_ps_antes_de_recarregar():
-    # 1ª geração: só lixo (achado real: isso deixava o runner antigo e o da retentativa
-    # disputando a VRAM ao mesmo tempo porque recarregava antes do unload terminar de
-    # verdade). 2ª geração (depois do unload + espera): sai limpa.
+def test_wait_for_unload_espera_a_vram_baixar_antes_de_voltar(tmp_path):
+    # Achado real (cap. 9): o /api/ps do Ollama já não listava mais o modelo, mas a VRAM
+    # física (sysfs do kernel) ainda estava quase toda ocupada — recarregar nessa janela
+    # deixava dois runners disputando a GPU e corrompia a geração de novo. A espera tem que
+    # se basear no uso real de VRAM, não no bookkeeping do Ollama.
+    total = tmp_path / "mem_info_vram_total"
+    used = tmp_path / "mem_info_vram_used"
+    total.write_text(str(8 * 1024**3))
+    used.write_text(str(int(8 * 1024**3 * 0.9)))  # quase tudo ocupado: ainda não pode recarregar
+
+    def sleep_and_free(_seconds):
+        # Efeito colateral do "tempo passando": o driver finalmente solta a memória.
+        used.write_text(str(int(8 * 1024**3 * 0.1)))
+
+    with patch.object(api, "_find_amdgpu_vram_sysfs", lambda: str(used)), \
+         patch.object(api.time, "sleep", sleep_and_free):
+        api._wait_for_unload("m", timeout=5)
+    assert int(used.read_text()) < int(total.read_text()) * 0.3
+
+
+def test_wait_for_unload_sem_sysfs_amdgpu_nao_trava():
+    # Outra GPU/driver sem esse sysfs: não há como checar, segue direto (sem travar à toa).
+    with patch.object(api, "_find_amdgpu_vram_sysfs", lambda: None), \
+         patch.object(api.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("não devia esperar"))):
+        api._wait_for_unload("m", timeout=5)
+
+
+def test_tokens_especiais_chama_a_espera_antes_de_recarregar():
+    # 1ª geração: só lixo. 2ª (depois do unload + espera): sai limpa. Confirma que o
+    # retry-por-lixo passa pela espera de VRAM antes de recarregar, não que ele recarrega
+    # na hora (o bug real do cap. 9: recarregar cedo demais corrompia a geração de novo).
     junk = [json.dumps({"response": "<unused1>", "done": False})] * (api._JUNK_LIMIT + 1)
     good = json.dumps({"response": "ok", "done": True})
     calls = []
@@ -394,24 +421,14 @@ def test_tokens_especiais_espera_o_runner_sair_do_ps_antes_de_recarregar():
         calls.append(json)
         return _Resp(200, lines=junk) if len(calls) == 1 else _Resp(200, lines=[good])
 
-    ps_responses = [{"models": [{"name": "m"}]}, {"models": []}]
-    ps_calls = []
-
-    def get(url, timeout=None):
-        ps_calls.append(url)
-        return _Resp(200, body=json.dumps(ps_responses[len(ps_calls) - 1]))
-
-    unload_calls = []
-    with patch.object(api.requests, "post", post), patch.object(api.requests, "get", get), \
-         patch.object(api, "unload_model", lambda m: unload_calls.append(m)), \
-         patch.object(api.time, "sleep", lambda s: None):
+    order = []
+    with patch.object(api.requests, "post", post), \
+         patch.object(api, "unload_model", lambda m: order.append(("unload", m))), \
+         patch.object(api, "_wait_for_unload", lambda m: order.append(("wait", m))):
         out = api.generate_text("m", "s", "p", num_ctx=4096, extra_options={"num_predict": 100})
 
     assert out == "ok"
-    assert unload_calls == ["m"]
-    # Só avançou pra recarregar depois que o /api/ps parou de listar o modelo (2 consultas:
-    # a 1ª ainda via "m" carregado, a 2ª já veio vazia).
-    assert len(ps_calls) == 2
+    assert order == [("unload", "m"), ("wait", "m")]
 
 
 # ── Fluxo completo com as etapas novas ────────────────────────

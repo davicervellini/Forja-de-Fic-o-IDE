@@ -7,8 +7,10 @@ e modo batch (resposta completa de uma vez).
 Timeouts generosos para acomodar troca de modelo na VRAM.
 """
 
+import glob
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -46,23 +48,58 @@ def unload_model(model: str):
         logger.warning(f"Não foi possível descarregar o modelo '{model}': {e}")
 
 
-def _wait_for_unload(model: str, timeout: float = 20.0):
+_amdgpu_vram_path: str | None = None
+_amdgpu_vram_checked = False
+
+
+def _find_amdgpu_vram_sysfs() -> str | None:
+    """Caminho do sysfs com o uso real de VRAM da GPU AMD (kernel, não o bookkeeping do Ollama)."""
+    global _amdgpu_vram_path, _amdgpu_vram_checked
+    if not _amdgpu_vram_checked:
+        _amdgpu_vram_checked = True
+        for device in glob.glob("/sys/class/drm/card*/device"):
+            try:
+                with open(os.path.join(device, "vendor")) as f:
+                    vendor = f.read().strip()
+                vram_path = os.path.join(device, "mem_info_vram_used")
+                if vendor == "0x1002" and os.path.isfile(vram_path):
+                    _amdgpu_vram_path = vram_path
+                    break
+            except OSError:
+                continue
+    return _amdgpu_vram_path
+
+
+def _wait_for_unload(model: str, timeout: float = 45.0, max_used_fraction: float = 0.3):
     """
-    Espera o Ollama de fato soltar o runner do modelo (`/api/ps` sem ele) antes de recarregar.
-    `unload_model` só agenda o descarregamento; se a próxima geração começar antes dele terminar,
-    dois runners disputam a VRAM ao mesmo tempo e a carga forçada (num_gpu fixo) corrompe de novo.
+    Espera a VRAM baixar de verdade antes de recarregar o modelo. `unload_model` só agenda o
+    descarregamento, e o `/api/ps` do Ollama marca o modelo como removido antes do driver soltar
+    a memória de fato — carregar de novo nessa janela deixa dois runners disputando a VRAM ao
+    mesmo tempo e, como o num_gpu do modelo é fixo, a carga forçada sem memória sobrando corrompe
+    a geração de novo. Lê o sysfs do kernel (amdgpu), que reflete o uso real; sem essa GPU/driver,
+    não há como checar e segue direto (perde a proteção, mas não trava à toa).
     """
-    ps_url = f"{config.OLLAMA_BASE_URL.rstrip('/')}/api/ps"
+    vram_path = _find_amdgpu_vram_sysfs()
+    if not vram_path:
+        return
+    try:
+        with open(vram_path.replace("vram_used", "vram_total")) as f:
+            total = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+    threshold = total * max_used_fraction
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = requests.get(ps_url, timeout=5)
-            names = {m.get("name") or m.get("model") for m in r.json().get("models", [])}
-            if model not in names:
-                return
-        except requests.RequestException:
+            with open(vram_path) as f:
+                used = int(f.read().strip())
+        except (OSError, ValueError):
+            return
+        if used <= threshold:
             return
         time.sleep(1)
+    logger.warning(f"VRAM ainda alta depois de {timeout:.0f}s esperando o descarregamento de '{model}'; "
+                    "tentando recarregar assim mesmo.")
 
 
 # ── Tamanho do prompt ────────────────────────────────────────
