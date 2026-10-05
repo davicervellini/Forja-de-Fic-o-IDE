@@ -618,6 +618,35 @@ def garbled_names(text: str, names: list[str], source: str = "") -> list[tuple[s
     return found
 
 
+_DOTTED_ACRONYM = re.compile(r"\b(?:[A-Z]\.){2,}[A-Z]?\.?")
+
+
+def garbled_acronym(text: str, names: list[str]) -> list[tuple[str, str]]:
+    """
+    Como `garbled_names`, mas para nomes em acrônimo pontuado (ex.: "R.A.S.P.U.T.I.N.") — o
+    polimento troca a ordem de duas letras ("R.A.P.S.U.T.I.N.") e `garbled_names` não pega
+    porque sua regex só reconhece uma palavra com maiúscula inicial, não uma sigla letra a letra.
+    Retorna [(sigla encontrada, nome oficial mais parecido)].
+    """
+    acronym_names = [n for n in names if _DOTTED_ACRONYM.fullmatch(n)]
+    if not acronym_names:
+        return []
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in _DOTTED_ACRONYM.findall(text or ""):
+        if m in seen:
+            continue
+        seen.add(m)
+        if any(m == n for n in acronym_names):
+            continue  # é a própria sigla oficial
+        letters = m.replace(".", "")
+        best = max(acronym_names, key=lambda n: SequenceMatcher(None, letters, n.replace(".", "")).ratio())
+        ratio = SequenceMatcher(None, letters, best.replace(".", "")).ratio()
+        if ratio >= 0.8:
+            found.append((m, best))
+    return found
+
+
 def refine_problems(polished: str, draft: str, premise: str = "", names: list[str] | None = None,
                     max_ratio: float = 1.25, forbidden: list[str] | None = None) -> list[str]:
     """
@@ -643,6 +672,10 @@ def refine_problems(polished: str, draft: str, premise: str = "", names: list[st
     if garbled:
         problems.append("inventou nome parecido com um oficial: "
                         + ", ".join(f'{w} (≈ {official})' for w, official in garbled[:4]))
+    garbled_acro = [(w, o) for w, o in garbled_acronym(polished, names or []) if w not in allowed]
+    if garbled_acro:
+        problems.append("inventou sigla parecida com uma oficial: "
+                        + ", ".join(f'{w} (≈ {official})' for w, official in garbled_acro[:4]))
     strangers = new_proper_nouns(polished, allowed)
     if len(strangers) >= 2:
         problems.append("inventou nomes: " + ", ".join(strangers[:6]))

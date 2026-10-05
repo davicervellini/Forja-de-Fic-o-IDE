@@ -81,6 +81,7 @@ from pipeline.scenes import (
     drop_new_system_lines,
     drop_overlap,
     fix_capitalized_names,
+    garbled_acronym,
     garbled_names,
     last_prose_sentence,
     new_proper_nouns,
@@ -886,7 +887,8 @@ class PipelineOrchestrator:
                 return any(mentions(n, p) and not mentions(n, scene) for n in forbidden) \
                     or any(mentions(n, p) and not mentions(n, source) for n in names) \
                     or len(new_proper_nouns(p, source)) >= 2 \
-                    or bool(garbled_names(p, names, source))
+                    or bool(garbled_names(p, names, source)) \
+                    or bool(garbled_acronym(p, names))
 
             fixed, changed = revert_paragraphs(out, scene, bad)
             if changed > 0:

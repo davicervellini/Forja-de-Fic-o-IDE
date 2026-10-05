@@ -712,6 +712,29 @@ def test_garbled_names_acha_nome_corrompido_em_qualquer_posicao():
     assert garbled_names("Kargen roared once.", names, draft) == []
 
 
+def test_garbled_acronym_acha_sigla_pontuada_corrompida():
+    from pipeline.scenes import garbled_acronym
+
+    names = ["Alexei", "Maeve", "R.A.S.P.U.T.I.N."]
+    # Achado real (cap. 12): o polimento trocou duas letras da sigla do computador da nave.
+    text = "R.A.P.S.U.T.I.N. said hello. Then R.A.S.P.U.T.I.N. replied correctly."
+    assert garbled_acronym(text, names) == [("R.A.P.S.U.T.I.N.", "R.A.S.P.U.T.I.N.")]
+    # A grafia oficial, sozinha, não acusa nada.
+    assert garbled_acronym("R.A.S.P.U.T.I.N. only, no corruption here.", names) == []
+    # Uma sigla qualquer, sem semelhança com nenhum nome oficial, não acusa nada.
+    assert garbled_acronym("Totally unrelated T.C.C. acronym here.", names) == []
+    # Sem nomes em formato de sigla no elenco, não há o que comparar.
+    assert garbled_acronym(text, ["Alexei", "Maeve"]) == []
+
+
+def test_polimento_com_sigla_corrompida_e_consertado_por_paragrafo():
+    scene = 'R.A.S.P.U.T.I.N. crackled. "Warning."'
+    polished = 'R.A.P.S.U.T.I.N. crackled. "Warning, Captain."'
+    names = ["Alexei", "R.A.S.P.U.T.I.N."]
+    problems = refine_problems(polished, scene, names=names, max_ratio=2)
+    assert any("R.A.P.S.U.T.I.N." in p and "R.A.S.P.U.T.I.N." in p for p in problems)
+
+
 def test_polimento_com_nome_corrompido_e_consertado_por_paragrafo():
     scene = "Alexei sighed. \"Maybe you just need a better perspective.\""
     polished = "Alexelli sighed. \"Maybe you just need a better perspective, da?\""
