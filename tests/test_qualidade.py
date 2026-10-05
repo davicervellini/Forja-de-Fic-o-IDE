@@ -18,6 +18,7 @@ from pipeline.cast import cast_status, debut_of
 from pipeline.orchestrator import PipelineOrchestrator
 from pipeline.project import StoryProject
 from pipeline.scenes import (
+    clean_scene,
     fix_capitalized_names,
     last_prose_sentence,
     lost_system_spans,
@@ -683,6 +684,18 @@ def test_conferencia_acha_palavras_coladas_com_sublinhado():
     assert "a_b" not in kinds["formatação"].text and "run_command" not in kinds["formatação"].text
     assert kinds["formatação"].hard
     assert qa.scene_issues("He walked through the junkyard quietly.", "", cl, "en", [], None) == []
+
+
+def test_clean_scene_normaliza_variante_de_system_com_dois_pontos():
+    # Achado real (cap. 11): o modelo escreveu "[System: ...]" em vez de "[System] ...", o
+    # formato usado em toda a história — SYSTEM_LINE (qa.py) só reconhece "[System]" e nem
+    # contava essa linha como linha de sistema.
+    raw = ("He tapped the scanner.\n\n"
+           "[System: Diagnostic Scan - Unit 44-Beta. Status: Offline.]\n\n"
+           "He frowned at the readout.")
+    out = clean_scene(raw)
+    assert "[System] Diagnostic Scan - Unit 44-Beta. Status: Offline." in out
+    assert "[System:" not in out
 
 
 def test_garbled_names_acha_nome_corrompido_em_qualquer_posicao():

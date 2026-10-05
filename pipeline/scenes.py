@@ -58,6 +58,10 @@ _LEADING_JUNK = re.compile(
     r"^\s*(?:#+\s.*|(?:chapter|cap[ií]tulo|chapitre|kapitel|capitolo)\s+\d+\b.*|(?:scene|cena)\s+\d+\b.*|\*\*[^*]{1,60}\*\*|(?:\*\s*){3})\s*$",
     re.I,
 )
+# O modelo, de vez em quando, escreve "[System: ...]" em vez de "[System] ..." — o formato usado
+# em toda a história. Sem essa normalização, a linha nem é reconhecida como linha de sistema
+# (SYSTEM_LINE em qa.py só casa "[System]").
+_SYSTEM_COLON_VARIANT = re.compile(r"^(\s*)\[System:\s*(.*?)\]\s*$", re.M)
 
 
 def count_words(text: str) -> int:
@@ -152,7 +156,8 @@ def clean_scene(text: str) -> str:
         lines.pop(0)
     while lines and (not lines[-1].strip() or _BREAK_LINE.match(lines[-1])):
         lines.pop()
-    return drop_meta_lines("\n".join(lines))
+    cleaned = _SYSTEM_COLON_VARIANT.sub(r"\1[System] \2", "\n".join(lines))
+    return drop_meta_lines(cleaned)
 
 
 def assemble_chapter(title: str | None, scenes: list[str], scene_break: str = SCENE_BREAK) -> str:

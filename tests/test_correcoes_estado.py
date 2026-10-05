@@ -269,7 +269,8 @@ def test_saida_so_com_tokens_especiais_descarrega_e_tenta_de_novo():
         return Stream([_json.dumps({"response": "Real text here, finally.", "done": True})])
 
     seen = []
-    with _patch.object(_requests, "post", fake_post), _patch.object(_config, "OLLAMA_GENERATE_URL", "http://x/api/generate"):
+    with _patch.object(_requests, "post", fake_post), _patch.object(_config, "OLLAMA_GENERATE_URL", "http://x/api/generate"), \
+         _patch.object(api, "_wait_for_unload", lambda m: None):
         out = api.generate_text("gemma4:12b", "s", "u", on_token=seen.append)
     assert out == "Real text here, finally."
     assert calls == {"gen": 2, "unload": 1}
