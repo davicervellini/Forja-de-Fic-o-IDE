@@ -142,10 +142,11 @@ _CHATTER = re.compile(
 )
 SYSTEM_LINE = re.compile(r"^\s*\[System\]", re.M)
 
-# Palavras_coladas_assim: artefato de modelos pequenos (parece nome de variável de código, nunca é
-# prosa de verdade). "well_known" como adjetivo hifenizado não existe em inglês com underscore, então
-# não há falso positivo esperado; linhas de comando/sistema (que podem ter nomes técnicos) ficam de fora.
-_GLUED_WORDS = re.compile(r"\b[a-zA-Z]{2,}_[a-zA-Z][a-zA-Z_]*\b")
+# Palavras_coladas_assim ou coordenadas_tipo_90_Beta: artefato de modelos pequenos (parece nome
+# de variável de código ou identificador técnico, nunca é prosa de verdade). "well_known" como
+# adjetivo hifenizado não existe em inglês com underscore, então não há falso positivo esperado;
+# linhas de comando/sistema (que podem ter nomes técnicos) ficam de fora.
+_GLUED_WORDS = re.compile(r"\b[a-zA-Z0-9]+_[a-zA-Z][a-zA-Z_]*\b")
 
 # Frases gastas de modelo pequeno (além das que o rascunho já evita): o polimento reescreve.
 CLICHES = [

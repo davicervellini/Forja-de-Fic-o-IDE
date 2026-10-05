@@ -686,6 +686,16 @@ def test_conferencia_acha_palavras_coladas_com_sublinhado():
     assert qa.scene_issues("He walked through the junkyard quietly.", "", cl, "en", [], None) == []
 
 
+def test_conferencia_acha_palavra_colada_com_digito_antes_do_sublinhado():
+    # Achado real (cap. 16): coordenadas tipo "45-90_Beta" — a regra antiga só reconhecia
+    # letra_letra, não dígito_letra, e deixava passar.
+    cl = qa.Checklist()
+    issues = qa.scene_issues("Impacts detected at coordinates 45-90_Beta.", "", cl, "en", [], None)
+    kinds = {i.kind: i for i in issues}
+    assert "formatação" in kinds
+    assert "90_Beta" in kinds["formatação"].text
+
+
 def test_clean_scene_normaliza_variante_de_system_com_dois_pontos():
     # Achado real (cap. 11): o modelo escreveu "[System: ...]" em vez de "[System] ...", o
     # formato usado em toda a história — SYSTEM_LINE (qa.py) só reconhece "[System]" e nem
